@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# Ignore only project data JSON
+data/cleaned/*.json
+#data/structured/*.json
