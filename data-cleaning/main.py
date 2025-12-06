@@ -5,7 +5,8 @@ from clean_json import extract_hierarchical_sections
 from s3_store_load import create_s3_bucket, upload_to_s3, load_from_s3
 from flattening_chunking import flatten_chunk_json
 from DynamoDB_store_load import upload_to_dynamodb
-from helper import save_json, load_json
+from helper import save_json
+from embedding import add_embeddings, build_faiss_index
 
 
 # ----------- Settings -----------
@@ -37,16 +38,39 @@ subprocess.run(["aws", "sso", "login", "--profile", profile_name], check=True)
 create_s3_bucket(bucket_name, profile_name, region)
 raw_json_path = os.path.join(save_dir, f"{disease_category}_raw.json")
 clean_json_path = os.path.join(save_dir, f"{disease_category}_clean.json")
-upload_to_s3(disease_category, bucket_name, profile_name, raw_json_path, clean_json_path)
+s3_raw_json_key = f"raw/{disease_category}_raw.json"
+s3_clean_json_key = f"clean/{disease_category}_clean.json"
+json_to_upload = [
+    (raw_json_path, s3_raw_json_key),
+    (clean_json_path, s3_clean_json_key)
+]
+upload_to_s3(json_to_upload, bucket_name, profile_name)
 
 # 4. Connect to S3 & load cleaned JSON file
-loaded_clean_json = load_from_s3(disease_category, bucket_name, profile_name, file_type="clean")
+loaded_clean_json = load_from_s3(bucket_name, profile_name, s3_clean_json_key)
 
 # 5. Flatten and chunk the JSON data
-flattened_chunks = flatten_chunk_json(loaded_clean_json, model_name="text-embedding-3-large", max_tokens = 500, overlap_tokens = 100)
+# (Important!!) Ensure the starting point is set correctly (need changes for multiple documents)
+# Current id 0 is for testing with only one document
+start_faiss_id = 0
+max_tokens = 800
+overlap_tokens = 120
+model_name = "text-embedding-3-large" # For estimating tokens in chunking only 
+flattened_chunks = flatten_chunk_json(loaded_clean_json, model_name, max_tokens, overlap_tokens, start_faiss_id)
 save_json(disease_category, "chunks", save_dir, flattened_chunks)
 
 # 6. Upload flattened chunks to DynamoDB
-table_name = "YOUR_DYNAMODB_TABLEs"
-flattened_json = load_json(disease_category, "chunks", save_dir)
-upload_to_dynamodb(profile_name, table_name, flattened_json)
+table_name = "YOUR_DYNAMODB_TABLE"
+upload_to_dynamodb(profile_name, table_name, flattened_chunks)
+
+# 7. Add embeddings using Bedrock Titan v2 embedding model
+embedding_model = "amazon.titan-embed-text-v2:0"
+chunk_embeddings = add_embeddings(flattened_chunks, embedding_model, profile_name, region) 
+save_json(disease_category, "chunk_embeddings", save_dir, chunk_embeddings)
+
+# 8. Build FAISS Index and Upload to S3
+FAISS_INDEX_FILE = "radonc_faiss_index.bin"
+local_faiss_path = os.path.join(save_dir, FAISS_INDEX_FILE)
+build_faiss_index(chunk_embeddings, local_faiss_path)
+index_file_to_upload = [(local_faiss_path, FAISS_INDEX_FILE)]
+upload_to_s3(index_file_to_upload, bucket_name, profile_name)

@@ -23,29 +23,24 @@ def create_s3_bucket(bucket_name, profile_name, region):
         print("stderr:", result.stderr.strip())
 
 
-def upload_to_s3(disease, bucket_name, profile_name, raw_json_path, clean_json_path):
-    """ Upload JSON files to an S3 bucket. """
+def upload_to_s3(files, bucket_name, profile_name):
+    """ Upload file(s) to an S3 bucket. """
 
     session = boto3.Session(profile_name=profile_name)
     s3 = session.client("s3")
 
-    upload_files = [
-        # (local json path, S3 object key [bucket path])
-        (raw_json_path, f"raw/{disease}_raw.json"),
-        (clean_json_path, f"clean/{disease}_clean.json")
-    ]
-
-    for local_path, s3_key in upload_files:
+    for local_path, s3_key in files:
         s3.upload_file(local_path, bucket_name, s3_key)
         print("Uploaded:", f"s3://{bucket_name}/{s3_key}")
 
 
-def load_from_s3(disease, bucket_name, profile_name, file_type="clean"):
-    """ Load JSON file from S3 bucket. """
+def load_from_s3(bucket_name, profile_name, s3_key):
+    """ Load a file from S3 bucket. """
 
     session = boto3.Session(profile_name=profile_name)
     s3 = session.client("s3")
-    s3_key = f"{file_type}/{disease}_{file_type}.json"
     obj = s3.get_object(Bucket=bucket_name, Key=s3_key)
-    data = json.loads(obj["Body"].read().decode("utf-8"))
+    data = obj["Body"].read()
+    if s3_key.endswith(".json"):
+        return json.loads(data.decode("utf-8"))
     return data

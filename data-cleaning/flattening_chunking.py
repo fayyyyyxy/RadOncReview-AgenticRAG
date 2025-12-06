@@ -41,13 +41,7 @@ def flatten_json(node: Dict, category: str, headings=None):
     return flattened
 
 
-def chunk_by_sentences(
-    text: str,
-    max_tokens: int = 500,
-    overlap_tokens: int = 100,
-    model_name: str = "text-embedding-3-large"
-) -> List[str]:
-
+def chunk_by_sentences(text: str, max_tokens: int , overlap_tokens: int, model_name: str) -> List[str]:
     # tokenizer for token counting
     encoding = tiktoken.encoding_for_model(model_name)
 
@@ -95,11 +89,15 @@ def chunk_by_sentences(
     return chunks
 
 
-def flatten_chunk_json(json_data, model_name, max_tokens, overlap_tokens):
-    """ Flatten and chunk hierarchical JSON data. """
+def flatten_chunk_json(json_data, model_name, max_tokens, overlap_tokens, start_faiss_id):
+    """ 
+    Flatten, chunk, and assign a unique sequential FAISS_ID to each chunk.
+    start_faiss_id ensures IDs are unique when running multiple ingestion jobs.
+    """
 
     flattened_data = flatten_json(json_data, json_data["Category"])
     flattened_chunks = []
+    faiss_id_counter = start_faiss_id
 
     for entry in flattened_data:
         content = entry.pop("content")  # remove original full content
@@ -107,8 +105,12 @@ def flatten_chunk_json(json_data, model_name, max_tokens, overlap_tokens):
         # Each chunk becomes a separate entry
         for i, chunk in enumerate(chunks):
             chunk_entry = entry.copy()
+            # Add FAISS_ID and chunk_id
+            chunk_entry["FAISS_ID"] = faiss_id_counter
             chunk_entry["chunk_id"] = i + 1
-            chunk_entry["text"] = chunk
+            # Add Path to each chunk's text for context
+            chunk_entry["text"] = f"Title: {entry['path']}\n\nContent: {chunk}"
             flattened_chunks.append(chunk_entry)
+            faiss_id_counter += 1
 
     return flattened_chunks
