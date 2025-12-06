@@ -2,7 +2,6 @@ import boto3
 import json
 import faiss
 import numpy as np
-import os
 
 def add_embeddings(chunks, model_id, aws_profile, region):
     """

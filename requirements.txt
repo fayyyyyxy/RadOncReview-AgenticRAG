@@ -1,0 +1,13 @@
+numpy
+faiss-cpu # Assuming CPU version for general use. If using GPU, use faiss-gpu
+tiktoken
+spacy
+
+# AWS SDK for Python
+boto3
+botocore
+
+# Google API client for discovery, HTTP, and OAuth
+google-api-python-client
+httplib2
+oauth2client
