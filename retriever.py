@@ -27,11 +27,11 @@ class RetrieverManager:
         self.embedding_config = embedding_config
         self.aws_config = aws_config
         
-        # Initialize AWS clients
+        # Initialize AWS clients with explicit region
         self.session = boto3.Session(profile_name=aws_config.profile_name)
         self.bedrock = self.session.client("bedrock-runtime", region_name=aws_config.region)
-        self.s3 = self.session.client("s3")
-        self.dynamodb = self.session.resource("dynamodb")
+        self.s3 = self.session.client("s3", region_name=aws_config.region)
+        self.dynamodb = self.session.resource("dynamodb", region_name=aws_config.region)
         self.table = self.dynamodb.Table(aws_config.dynamodb_table)
         
         # FAISS index (loaded lazily)
@@ -79,13 +79,32 @@ class RetrieverManager:
             
             for fid in batch_ids:
                 try:
-                    response = self.table.get_item(Key={"FAISS_ID": fid})
+                    # Convert to Python int (handles numpy.int64)
+                    fid_int = int(fid)
+                    response = self.table.get_item(Key={"FAISS_ID": fid_int})
                     if "Item" in response:
-                        chunks.append(response["Item"])
+                        # Convert Decimal values back to native Python types
+                        item = self._convert_decimals(response["Item"])
+                        chunks.append(item)
                 except Exception as e:
                     print(f"Error fetching FAISS_ID {fid}: {e}")
         
         return chunks
+    
+    def _convert_decimals(self, obj):
+        """Convert Decimal objects to int/float for JSON serialization."""
+        from decimal import Decimal
+        
+        if isinstance(obj, dict):
+            return {k: self._convert_decimals(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_decimals(v) for v in obj]
+        elif isinstance(obj, Decimal):
+            if obj % 1 == 0:
+                return int(obj)
+            else:
+                return float(obj)
+        return obj
     
     def dense_search(self, query: str, top_k: Optional[int] = None) -> List[RetrievedChunk]:
         """Perform dense (vector similarity) search."""
