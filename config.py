@@ -18,11 +18,11 @@ class AWSConfig:
 @dataclass
 class LLMConfig:
     """LLM configuration for AWS Bedrock."""
-    model_id: str = "anthropic.claude-3-sonnet-20240229-v1:0"
-    # Alternative models:
-    # "anthropic.claude-3-haiku-20240307-v1:0"  # Faster, cheaper
-    # "meta.llama3-70b-instruct-v1:0"  # Llama 3
-    max_tokens: int = 4096
+    # Available models (based on check_available_models.py results):
+    # - meta.llama3-70b-instruct-v1:0  ✅ Available (recommended, more powerful)
+    # - meta.llama3-8b-instruct-v1:0   ✅ Available (faster, cheaper)
+    model_id: str = "meta.llama3-70b-instruct-v1:0"
+    max_tokens: int = 2048  # Llama 3 max_gen_len
     temperature: float = 0.1  # Low temperature for factual responses
     top_p: float = 0.9
 
@@ -37,8 +37,8 @@ class EmbeddingConfig:
 @dataclass
 class RetrieverConfig:
     """Retrieval configuration."""
-    top_k: int = 10  # Number of chunks to retrieve
-    similarity_threshold: float = 0.5  # Minimum similarity score
+    top_k: int = 15  # Number of chunks to retrieve (increased)
+    similarity_threshold: float = 0.3  # Minimum similarity score (lowered for better recall)
     rerank_top_k: int = 5  # Final number after reranking
     use_hybrid_search: bool = True  # Combine dense + sparse retrieval
 
