@@ -144,6 +144,53 @@ class MockLLMClient(BaseLLMClient):
             "content": [{"type": "text", "text": f"Mock tool response #{self.call_count}"}],
             "stop_reason": "end_turn"
         }
+    
+    def generate_structured(
+        self, 
+        prompt: str, 
+        output_schema: Dict,
+        system_prompt: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Generate mock structured response based on schema."""
+        self.call_count += 1
+        
+        # Return mock data based on what the schema expects
+        if "is_complete" in str(output_schema):
+            # Self-critique response
+            return {
+                "is_complete": True,
+                "is_accurate": True,
+                "is_safe": True,
+                "missing_aspects": [],
+                "concerns": [],
+                "confidence_score": 0.85,
+                "suggestions": []
+            }
+        elif "intent" in str(output_schema):
+            # Query analysis response
+            return {
+                "intent": "general",
+                "disease_category": None,
+                "treatment_modality": None,
+                "key_entities": [],
+                "temporal_context": None,
+                "is_complex": False,
+                "reasoning": "Mock analysis"
+            }
+        elif "sub_tasks" in str(output_schema):
+            # Task planning response
+            return {
+                "reasoning": "Mock planning - breaking down into sub-tasks",
+                "sub_tasks": [
+                    {
+                        "description": "Search for relevant guidelines",
+                        "query": prompt[:50],
+                        "strategy": "hybrid"
+                    }
+                ]
+            }
+        else:
+            return {"mock": True, "call_count": self.call_count}
 
 
 def create_llm_client(
