@@ -1,267 +1,371 @@
 # Agentic RAG Engine for Radiation Oncology
 
-An autonomous Retrieval Augmented Generation (RAG) system for radiation oncology treatment guidelines retrieval.
+An autonomous Retrieval Augmented Generation (RAG) system for radiation oncology treatment guidelines retrieval. This system connects to AWS services (S3, DynamoDB, Bedrock) to provide accurate, citation-backed answers to clinical questions.
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        User Query                                    │
+│                        User Query                                   │
+│            "What is the standard dose for breast cancer?"           │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Input Guardrails                                  │
-│              (PHI Filter, Length Check, Safety)                     │
+│                     Input Guardrails                                │
+│               • PHI Detection & Filtering                           │
+│               • Input Validation                                    │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Query Analyzer                                    │
-│     (Intent Classification, Entity Extraction, Complexity Check)    │
+│                     Query Analyzer                                  │
+│               • Intent Classification                               │
+│               • Disease Category Detection                          │
+│               • Treatment Modality Extraction                       │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Task Planner                                      │
-│         (Query Decomposition, Strategy Selection, Planning)         │
+│                     Task Planner                                    │
+│               • Query Decomposition                                 │
+│               • Retrieval Strategy Selection                        │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  Retriever Manager                                   │
-│                                                                      │
-│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                │
-│   │   Dense     │  │   Sparse    │  │   Hybrid    │                │
-│   │  (FAISS)    │  │  (Keyword)  │  │   (RRF)     │                │
-│   └─────────────┘  └─────────────┘  └─────────────┘                │
-│                                                                      │
-│   ┌─────────────────────────────────────────────────┐              │
-│   │              DynamoDB (Metadata)                 │              │
-│   └─────────────────────────────────────────────────┘              │
+│                   Retriever Manager                                 │
+│    ┌───────────┐    ┌───────────┐    ┌───────────────────┐          │
+│    │   FAISS   │    │ DynamoDB  │    │  Amazon Titan     │          │
+│    │  (S3)     │    │ (Chunks)  │    │  (Embeddings)     │          │
+│    └───────────┘    └───────────┘    └───────────────────┘          │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                 Response Synthesizer                                 │
-│            (LLM Generation with Citations)                          │
+│                  Response Synthesizer                               │
+│               • Llama 3 70B (via Bedrock)                           │
+│               • Citation Generation                                 │
+│               • Self-Critique & Validation                          │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Self-Critic                                       │
-│       (Completeness, Accuracy, Safety Evaluation)                   │
-│                         │                                            │
-│              ┌──────────┴──────────┐                                │
-│              ▼                     ▼                                │
-│         [Pass]              [Needs Retry]                           │
-│              │                     │                                │
-│              │           ┌────────▼────────┐                        │
-│              │           │  Replan & Retry │                        │
-│              │           └─────────────────┘                        │
+│                    Output Guardrails                                │
+│               • Safety Verification                                 │
+│               • Medical Disclaimer Addition                         │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                   Output Guardrails                                  │
-│           (Safety Check, Disclaimer Addition)                       │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Final Response                                  │
-│         (Answer + Citations + Confidence + Reasoning)               │
+│                      Final Response                                 │
+│          Answer + Citations + Confidence Score                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## 📁 Project Structure
+## Prerequisites
 
-```
-agentic_rag/
-├── __init__.py          # Package initialization
-├── config.py            # Configuration settings
-├── models.py            # Data models and types
-├── llm_client.py        # LLM client (AWS Bedrock)
-├── query_analyzer.py    # Query analysis and classification
-├── task_planner.py      # Task decomposition and planning
-├── retriever.py         # Retrieval manager (FAISS + DynamoDB)
-├── synthesizer.py       # Response synthesis and self-critique
-├── guardrails.py        # Safety and compliance checks
-├── agent.py             # Main agent orchestration
-├── api.py               # REST API endpoints
-├── demo.py              # Demo and testing scripts
-├── requirements.txt     # Python dependencies
-└── README.md            # This file
-```
+Before using this system, ensure you have:
 
-## 🚀 Quick Start
+1. **Python 3.9+** installed
+2. **AWS CLI** configured with SSO access
+3. **Data Pipeline Completed** - The `data_prep` pipeline must have been run to populate:
+   - S3 bucket with FAISS index (`radonc_faiss_index.bin`)
+   - DynamoDB table with chunk data (`YOUR_DYNAMODB_TABLE`)
 
-### 1. Install Dependencies
+## Setup
+
+### Step 1: Install Dependencies
 
 ```bash
+# Create virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install required packages
 pip install -r requirements.txt
+
+# Download spaCy model (for text processing)
 python -m spacy download en_core_web_sm
 ```
 
-### 2. Run Demo (Mock Mode)
-
-Test the system without AWS credentials:
+### Step 2: Configure AWS Credentials
 
 ```bash
-# Run all demos
-python demo.py --mode all
-
-# Interactive mode
-python demo.py --mode interactive
-
-# Specific component demo
-python demo.py --mode analysis
-python demo.py --mode planning
-python demo.py --mode guardrails
-python demo.py --mode pipeline
+# Login to AWS SSO
+aws sso login --profile YOUR_AWS_PROFILE
 ```
 
-### 3. Configure AWS Credentials
-
-Ensure your AWS profile is configured:
+If you haven't configured the AWS profile yet:
 
 ```bash
-aws configure --profile YOUR_AWS_PROFILE
+# Configure SSO profile
+aws configure sso --profile YOUR_AWS_PROFILE
+
+# You'll be prompted for:
+# - SSO start URL (get from your AWS admin)
+# - SSO region: YOUR_AWS_REGION
+# - Account and role selection
 ```
 
-### 4. Run with Real AWS Backend
+### Step 3: Verify Configuration
+
+Edit `config.py` if your AWS settings differ:
 
 ```python
-from agentic_rag import create_agent
-
-# Create agent with real AWS connections
-agent = create_agent(use_mock=False)
-
-# Query the system
-response = agent.query("What is the standard dose for breast cancer IMRT?")
-
-print(response.answer)
-print(f"Confidence: {response.confidence_score:.2%}")
-for citation in response.citations:
-    print(f"[{citation.citation_id}] {citation.source_path}")
+@dataclass
+class AWSConfig:
+    profile_name: str = "YOUR_AWS_PROFILE"  # Your AWS profile
+    region: str = "YOUR_AWS_REGION"               # AWS region
+    s3_bucket: str = "YOUR_S3_BUCKET"        # S3 bucket name
+    dynamodb_table: str = "YOUR_DYNAMODB_TABLE"  # DynamoDB table
+    faiss_index_key: str = "radonc_faiss_index.bin"  # FAISS index file
 ```
 
-### 5. Run API Server
+### Step 4: Check Available LLM Models
 
 ```bash
-# Development mode
-python api.py
-
-# Or with uvicorn
-uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+python check_available_models.py
 ```
 
-API endpoints:
-- `GET /health` - Health check
-- `POST /query` - Query guidelines
-- `POST /feedback` - Submit feedback
-- `GET /categories` - List disease categories
-- `GET /modalities` - List treatment modalities
-
-## 🔧 Configuration
-
-Edit `config.py` to customize:
+This will show which Bedrock models your account can access. Update `config.py` if needed:
 
 ```python
 @dataclass
 class LLMConfig:
-    model_id: str = "anthropic.claude-3-sonnet-20240229-v1:0"
-    max_tokens: int = 4096
-    temperature: float = 0.1
-
-@dataclass
-class RetrieverConfig:
-    top_k: int = 10
-    similarity_threshold: float = 0.5
-    use_hybrid_search: bool = True
-
-@dataclass
-class AgentConfig:
-    max_iterations: int = 5
-    enable_self_critique: bool = True
-    confidence_threshold: float = 0.7
+    model_id: str = "meta.llama3-70b-instruct-v1:0"  # Change if different model available
 ```
 
-## 📊 Key Features
+## Usage
 
-### Query Analysis
-- Intent classification (dose, protocol, side effects, comparison, etc.)
-- Disease category detection (Breast, Thorax, CNS, etc.)
-- Treatment modality extraction (IMRT, SBRT, Brachytherapy, etc.)
-- Complexity assessment for multi-step queries
+### Interactive Chat (Recommended)
 
-### Retrieval Strategies
-- **Dense Search**: FAISS vector similarity using Titan embeddings
-- **Sparse Search**: Keyword-based matching with BM25-style scoring
-- **Hybrid Search**: Reciprocal Rank Fusion (RRF) combining both
-- **Multi-hop**: Iterative refinement for complex queries
-
-### Self-Critique
-- Completeness evaluation
-- Accuracy verification against citations
-- Safety assessment for medical recommendations
-- Automatic retry with improved retrieval
-
-### Guardrails
-- PHI (Protected Health Information) filtering
-- Input length and content validation
-- Output safety checks
-- Automatic disclaimer addition
-
-## 🧪 Testing
+Start an interactive chat session:
 
 ```bash
-# Run all tests
-pytest tests/
-
-# Run specific test
-pytest tests/test_query_analyzer.py -v
+python chat.py
 ```
 
-## 📝 Example Queries
+Example session:
+
+```
+============================================================
+  RadOnc Agentic RAG - Interactive Chat
+============================================================
+
+Connecting to AWS...
+Connected successfully!
+
+Ask questions about radiation oncology treatment guidelines.
+Type 'quit' or 'exit' to end the session.
+Type 'trace' to show reasoning trace for the last query.
+------------------------------------------------------------
+
+You: What is the standard dose for breast cancer?
+
+Thinking...
+[10:38:14] GUARDRAIL: Checking input safety
+[10:38:14] ANALYZE: Intent: dose_fractionation, Disease: Breast
+[10:38:14] PLAN: Created 1 sub-tasks
+[10:38:15] RETRIEVE: Found 10 relevant chunks
+[10:38:17] SYNTHESIZE: Generating answer...
+
+Agent: Based on the guidelines, hypofractionation is recommended for 
+whole breast irradiation. The standard regimens are 40 Gy in 15 fractions 
+(START B) or 42.5 Gy in 16 fractions (Whelan) [1][2].
+
+[Confidence: 85.0% | Citations: 3 | Latency: 3200ms]
+
+Sources:
+  [1] Breast > Fractionation
+  [2] Breast > Whole Breast Irradiation
+
+You: trace
+
+--- Reasoning Trace ---
+  [10:38:14] GUARDRAIL: Checking input safety
+  [10:38:14] ANALYZE: Intent: dose_fractionation, Disease: Breast
+  [10:38:14] PLAN: Created 1 sub-tasks: Simple query
+  [10:38:15] RETRIEVE: Task completed, found 10 chunks
+  [10:38:17] SYNTHESIZE: Generated answer with 3 citations
+  [10:38:17] CRITIQUE: Complete: True, Accurate: True, Safe: True
+------------------------------
+
+You: quit
+Goodbye!
+```
+
+### Demo Mode (No AWS Required)
+
+Test the system components without AWS:
+
+```bash
+# Run all demos with mock data
+python demo.py --mode all
+
+# Test specific components
+python demo.py --mode analysis    # Query analysis
+python demo.py --mode planning    # Task planning
+python demo.py --mode guardrails  # Safety checks
+python demo.py --mode pipeline    # Full pipeline (mock)
+```
+
+### REST API
+
+Start the API server:
+
+```bash
+python api.py
+# Or with hot reload:
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+API endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/query` | POST | Submit a question |
+| `/feedback` | POST | Submit feedback |
+| `/categories` | GET | List disease categories |
+| `/modalities` | GET | List treatment modalities |
+
+Example API call:
+
+```bash
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{
+    "query": "What is the standard dose for breast cancer?",
+    "include_reasoning": true,
+    "include_citations": true
+  }'
+```
+
+### Python API
+
+Use the agent programmatically:
 
 ```python
-# Simple factual query
-"What is the standard dose for whole breast radiation?"
+from agent import create_agent
 
-# Comparison query
-"Compare SBRT vs conventional fractionation for early-stage lung cancer"
+# Create agent (connects to AWS)
+agent = create_agent(use_mock=False)
 
-# Complex multi-part query
-"What are the indications, contraindications, and dose fractionation 
-options for stereotactic radiosurgery in brain metastases?"
+# Query
+response = agent.query("What is the standard dose for breast cancer?")
 
-# Side effects query
-"What are the acute and late toxicities of thoracic radiation?"
+# Access results
+print(response.answer)
+print(f"Confidence: {response.confidence_score:.1%}")
 
-# Staging query
-"What is the treatment approach for T2N1M0 breast cancer?"
+for citation in response.citations:
+    print(f"[{citation.citation_id}] {citation.source_path}")
+
+# View reasoning trace
+for step in response.reasoning_trace:
+    print(step)
 ```
 
-## 🔒 Security Considerations
+## Project Structure
 
-1. **PHI Protection**: Automatic detection and filtering of patient identifiers
-2. **API Authentication**: API key validation for all endpoints
-3. **Content Safety**: Output guardrails prevent harmful recommendations
-4. **Audit Logging**: All queries and responses can be logged for compliance
+```
+agentic_rag/
+├── __init__.py           # Package initialization
+├── config.py             # Configuration settings
+├── models.py             # Data models (QueryAnalysis, AgentResponse, etc.)
+│
+├── agent.py              # Main agent orchestrator
+├── query_analyzer.py     # Query intent & entity extraction
+├── task_planner.py       # Task decomposition & planning
+├── retriever.py          # FAISS search & DynamoDB retrieval
+├── synthesizer.py        # LLM response generation & self-critique
+├── guardrails.py         # Input/output safety checks
+├── llm_client.py         # AWS Bedrock LLM client
+│
+├── chat.py               # Interactive chat interface
+├── api.py                # REST API server
+├── demo.py               # Demo & testing scripts
+├── check_available_models.py  # Detect available Bedrock models
+│
+├── requirements.txt      # Python dependencies
+└── README.md             # This file
+```
 
-## 📈 Next Steps
+## Supported Query Types
 
-1. **AWS AgentCore Integration**: Deploy on AWS AgentCore for production scaling
-2. **Web UI Development**: Build React/Tailwind interface
-3. **Feedback Loop**: Implement RLHF for continuous improvement
-4. **Evaluation Framework**: Add automated benchmarking and metrics
-5. **Additional Guidelines**: Ingest NCCN, ASTRO, ESTRO guidelines
+| Intent | Example Questions |
+|--------|-------------------|
+| Dose/Fractionation | "What is the dose for breast IMRT?" |
+| Treatment Protocol | "What is the standard treatment for stage III lung cancer?" |
+| Side Effects | "What are the side effects of whole brain radiation?" |
+| Comparison | "Compare SBRT vs conventional fractionation" |
+| Indications | "When is proton therapy indicated?" |
+| Contraindications | "What are contraindications for brachytherapy?" |
+| Staging | "How is T2N1M0 breast cancer treated?" |
 
-## 📄 License
+## Supported Disease Categories
 
-[Your License Here]
+- Breast
+- Thorax (Lung, Esophagus)
+- Hematologic (Lymphoma, Leukemia)
+- CNS (Brain tumors)
+- GI (Gastric, Pancreatic, Colorectal)
+- GU (Prostate, Bladder)
+- Gynecologic (Cervical, Uterine)
+- Head & Neck
+- Pediatric
+- Sarcoma
+- Skin (Melanoma)
 
-## 🤝 Contributing
+## Troubleshooting
 
-[Contribution Guidelines]
+### AWS Connection Issues
+
+```bash
+# Re-login to AWS SSO
+aws sso login --profile YOUR_AWS_PROFILE
+
+# Verify connection
+aws s3 ls s3://YOUR_S3_BUCKET --profile YOUR_AWS_PROFILE
+```
+
+### Model Access Denied
+
+Run the model checker to see available models:
+
+```bash
+python check_available_models.py
+```
+
+Update `config.py` with an available model.
+
+### No Results Found
+
+1. Check if data pipeline has been run (`data_prep/main.py`)
+2. Verify DynamoDB table exists and has data
+3. Verify FAISS index exists in S3
+
+## Configuration Options
+
+### Retrieval Settings (`config.py`)
+
+```python
+@dataclass
+class RetrieverConfig:
+    top_k: int = 15                    # Number of chunks to retrieve
+    similarity_threshold: float = 0.3  # Minimum similarity score
+    rerank_top_k: int = 5              # Final chunks after reranking
+    use_hybrid_search: bool = True     # Combine dense + sparse search
+```
+
+### Agent Settings (`config.py`)
+
+```python
+@dataclass
+class AgentConfig:
+    max_iterations: int = 5            # Max reasoning iterations
+    enable_self_critique: bool = True  # Enable answer self-evaluation
+    confidence_threshold: float = 0.7  # Minimum confidence to answer
+```
