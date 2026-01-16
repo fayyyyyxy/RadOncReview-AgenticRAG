@@ -42,19 +42,56 @@ class BedrockLLMClient(BaseLLMClient):
         )
     
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Generate a response using Claude on Bedrock."""
-        messages = [{"role": "user", "content": prompt}]
+        """Generate a response using LLM on Bedrock."""
         
-        request_body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
-            "top_p": self.config.top_p,
-            "messages": messages
-        }
-        
-        if system_prompt:
-            request_body["system"] = system_prompt
+        # 检测模型类型并使用对应的 API 格式
+        if "anthropic" in self.config.model_id:
+            # Claude 模型格式
+            messages = [{"role": "user", "content": prompt}]
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": self.config.max_tokens,
+                "temperature": self.config.temperature,
+                "top_p": self.config.top_p,
+                "messages": messages
+            }
+            if system_prompt:
+                request_body["system"] = system_prompt
+                
+        elif "titan" in self.config.model_id:
+            # Amazon Titan 模型格式
+            full_prompt = prompt
+            if system_prompt:
+                full_prompt = f"{system_prompt}\n\n{prompt}"
+            request_body = {
+                "inputText": full_prompt,
+                "textGenerationConfig": {
+                    "maxTokenCount": self.config.max_tokens,
+                    "temperature": self.config.temperature,
+                    "topP": self.config.top_p
+                }
+            }
+            
+        elif "meta" in self.config.model_id or "llama" in self.config.model_id.lower():
+            # Llama 模型格式
+            full_prompt = prompt
+            if system_prompt:
+                full_prompt = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{prompt} [/INST]"
+            request_body = {
+                "prompt": full_prompt,
+                "max_gen_len": self.config.max_tokens,
+                "temperature": self.config.temperature,
+                "top_p": self.config.top_p
+            }
+        else:
+            # 默认格式
+            request_body = {
+                "inputText": prompt,
+                "textGenerationConfig": {
+                    "maxTokenCount": self.config.max_tokens,
+                    "temperature": self.config.temperature
+                }
+            }
         
         response = self.client.invoke_model(
             modelId=self.config.model_id,
@@ -62,7 +99,16 @@ class BedrockLLMClient(BaseLLMClient):
         )
         
         response_body = json.loads(response["body"].read())
-        return response_body["content"][0]["text"]
+        
+        # 根据模型类型解析响应
+        if "anthropic" in self.config.model_id:
+            return response_body["content"][0]["text"]
+        elif "titan" in self.config.model_id:
+            return response_body["results"][0]["outputText"]
+        elif "meta" in self.config.model_id or "llama" in self.config.model_id.lower():
+            return response_body["generation"]
+        else:
+            return response_body.get("results", [{}])[0].get("outputText", str(response_body))
     
     def generate_with_tools(
         self, 
