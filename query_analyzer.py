@@ -130,15 +130,26 @@ class QueryAnalyzer:
     
     def analyze(self, query: str) -> QueryAnalysis:
         """Perform rule-based query analysis."""
-        # Detect intent
+        # Detect intent - check comparison FIRST (higher priority)
         intent = QueryIntent.GENERAL
-        for intent_type, patterns in self.INTENT_PATTERNS.items():
-            for pattern in patterns:
-                if re.search(pattern, query, re.IGNORECASE):
-                    intent = intent_type
-                    break
-            if intent != QueryIntent.GENERAL:
+        
+        # Check comparison patterns first (they often contain dose/treatment terms too)
+        for pattern in self.INTENT_PATTERNS[QueryIntent.COMPARISON]:
+            if re.search(pattern, query, re.IGNORECASE):
+                intent = QueryIntent.COMPARISON
                 break
+        
+        # If not comparison, check other intents
+        if intent == QueryIntent.GENERAL:
+            for intent_type, patterns in self.INTENT_PATTERNS.items():
+                if intent_type == QueryIntent.COMPARISON:
+                    continue  # Already checked
+                for pattern in patterns:
+                    if re.search(pattern, query, re.IGNORECASE):
+                        intent = intent_type
+                        break
+                if intent != QueryIntent.GENERAL:
+                    break
         
         # Detect disease category
         disease_category = self._match_patterns(query, self.DISEASE_PATTERNS)
