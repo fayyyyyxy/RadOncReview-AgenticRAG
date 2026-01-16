@@ -1,5 +1,5 @@
 """
-检测哪些 Bedrock 模型可用
+Detect which Bedrock models are available for your AWS account.
 """
 import boto3
 import json
@@ -7,7 +7,7 @@ import json
 PROFILE = "YOUR_AWS_PROFILE"
 REGION = "YOUR_AWS_REGION"
 
-# 常用模型列表
+# List of common models to test
 MODELS_TO_TEST = [
     # Amazon Titan
     ("amazon.titan-text-premier-v1:0", "Amazon Titan Premier"),
@@ -29,9 +29,9 @@ MODELS_TO_TEST = [
 ]
 
 def test_model(bedrock_client, model_id, model_name):
-    """测试单个模型是否可用"""
+    """Test if a single model is available"""
     try:
-        # 根据模型类型构建请求
+        # Build request based on model type
         if "anthropic" in model_id:
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
@@ -60,24 +60,24 @@ def test_model(bedrock_client, model_id, model_name):
             modelId=model_id,
             body=json.dumps(body)
         )
-        return True, "✅ 可用"
+        return True, "AVAILABLE"
         
     except bedrock_client.exceptions.AccessDeniedException:
-        return False, "❌ 无权限"
+        return False, "ACCESS DENIED"
     except bedrock_client.exceptions.ValidationException as e:
         if "not authorized" in str(e).lower():
-            return False, "❌ 无权限"
-        return False, f"⚠️ 验证错误: {str(e)[:50]}"
+            return False, "ACCESS DENIED"
+        return False, f"VALIDATION ERROR: {str(e)[:50]}"
     except Exception as e:
         error_msg = str(e)
         if "not authorized" in error_msg.lower() or "deny" in error_msg.lower():
-            return False, "❌ 无权限"
-        return False, f"⚠️ 错误: {error_msg[:50]}"
+            return False, "ACCESS DENIED"
+        return False, f"ERROR: {error_msg[:50]}"
 
 
 def main():
     print("=" * 60)
-    print("🔍 检测可用的 Bedrock 模型")
+    print("Detecting Available Bedrock Models")
     print("=" * 60)
     print(f"\nProfile: {PROFILE}")
     print(f"Region: {REGION}\n")
@@ -86,31 +86,32 @@ def main():
         session = boto3.Session(profile_name=PROFILE)
         bedrock = session.client("bedrock-runtime", region_name=REGION)
     except Exception as e:
-        print(f"❌ 无法创建 Bedrock 客户端: {e}")
+        print(f"ERROR - Cannot create Bedrock client: {e}")
         return
     
-    print("测试模型可用性...\n")
+    print("Testing model availability...\n")
     
     available_models = []
     
     for model_id, model_name in MODELS_TO_TEST:
         is_available, status = test_model(bedrock, model_id, model_name)
-        print(f"  {model_name:25} {status}")
+        status_icon = "[+]" if is_available else "[-]"
+        print(f"  {status_icon} {model_name:25} {status}")
         if is_available:
             available_models.append((model_id, model_name))
     
     print("\n" + "=" * 60)
     
     if available_models:
-        print("✅ 可用的模型:")
+        print("Available models:")
         for model_id, model_name in available_models:
             print(f"  - {model_name}: {model_id}")
         
-        print(f"\n💡 建议: 在 config.py 中将 model_id 设置为:")
+        print(f"\nRecommendation: Set model_id in config.py to:")
         print(f'   model_id: str = "{available_models[0][0]}"')
     else:
-        print("❌ 没有找到可用的模型")
-        print("\n请联系你的 AWS 管理员开通 Bedrock 模型访问权限")
+        print("No available models found")
+        print("\nPlease contact your AWS administrator to enable Bedrock model access")
 
 
 if __name__ == "__main__":
