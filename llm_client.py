@@ -44,9 +44,9 @@ class BedrockLLMClient(BaseLLMClient):
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Generate a response using LLM on Bedrock."""
         
-        # 检测模型类型并使用对应的 API 格式
+        # Detect the model type and use the corresponding API format
         if "anthropic" in self.config.model_id:
-            # Claude 模型格式
+            # Claude
             messages = [{"role": "user", "content": prompt}]
             request_body = {
                 "anthropic_version": "bedrock-2023-05-31",
@@ -59,7 +59,7 @@ class BedrockLLMClient(BaseLLMClient):
                 request_body["system"] = system_prompt
                 
         elif "titan" in self.config.model_id:
-            # Amazon Titan 模型格式
+            # Amazon Titan
             full_prompt = prompt
             if system_prompt:
                 full_prompt = f"{system_prompt}\n\n{prompt}"
@@ -73,7 +73,7 @@ class BedrockLLMClient(BaseLLMClient):
             }
             
         elif "meta" in self.config.model_id or "llama" in self.config.model_id.lower():
-            # Llama 模型格式
+            # Llama
             full_prompt = prompt
             if system_prompt:
                 full_prompt = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{prompt} [/INST]"
@@ -84,7 +84,7 @@ class BedrockLLMClient(BaseLLMClient):
                 "top_p": self.config.top_p
             }
         else:
-            # 默认格式
+            # Default
             request_body = {
                 "inputText": prompt,
                 "textGenerationConfig": {
@@ -100,7 +100,7 @@ class BedrockLLMClient(BaseLLMClient):
         
         response_body = json.loads(response["body"].read())
         
-        # 根据模型类型解析响应
+        # Parse the response based on the model type
         if "anthropic" in self.config.model_id:
             return response_body["content"][0]["text"]
         elif "titan" in self.config.model_id:
