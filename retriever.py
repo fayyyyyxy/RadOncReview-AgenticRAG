@@ -231,9 +231,10 @@ class RetrieverManager:
         top_k = top_k or self.config.top_k
         
         # Get results from both methods
-        dense_results = self.dense_search(query, top_k=top_k * 2)
-        sparse_results = self.sparse_search(query, top_k=top_k * 2)
+        dense_results = self.dense_search(query, top_k=top_k )
+        sparse_results = self.sparse_search(query, top_k=top_k )
         
+    
         # Merge results using Reciprocal Rank Fusion (RRF)
         rrf_scores = {}
         k = 60  # RRF constant

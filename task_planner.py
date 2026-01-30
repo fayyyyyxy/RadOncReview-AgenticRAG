@@ -20,14 +20,14 @@ class TaskPlanner:
     # Intent to retrieval strategy mapping
     STRATEGY_MAP = {
         QueryIntent.DOSE_FRACTIONATION: RetrievalStrategy.DENSE,
-        QueryIntent.TREATMENT_PROTOCOL: RetrievalStrategy.HYBRID,
+        QueryIntent.TREATMENT_PROTOCOL: RetrievalStrategy.DENSE,
         QueryIntent.SIDE_EFFECTS: RetrievalStrategy.DENSE,
-        QueryIntent.STAGING: RetrievalStrategy.SPARSE,  # Keyword-heavy
-        QueryIntent.INDICATIONS: RetrievalStrategy.HYBRID,
-        QueryIntent.CONTRAINDICATIONS: RetrievalStrategy.HYBRID,
+        QueryIntent.STAGING: RetrievalStrategy.DENSE,  # Keyword-heavy
+        QueryIntent.INDICATIONS: RetrievalStrategy.DENSE,
+        QueryIntent.CONTRAINDICATIONS: RetrievalStrategy.DENSE,
         QueryIntent.COMPARISON: RetrievalStrategy.MULTI_HOP,
-        QueryIntent.DEFINITION: RetrievalStrategy.SPARSE,
-        QueryIntent.GENERAL: RetrievalStrategy.HYBRID,
+        QueryIntent.DEFINITION: RetrievalStrategy.DENSE,
+        QueryIntent.GENERAL: RetrievalStrategy.DENSE,
     }
     
     def __init__(self, llm_client: BaseLLMClient, config: AgentConfig):
