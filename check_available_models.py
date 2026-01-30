@@ -9,25 +9,16 @@ REGION = "YOUR_AWS_REGION"
 
 # List of common models to test
 MODELS_TO_TEST = [
-    # Amazon Titan
-    ("amazon.titan-text-premier-v1:0", "Amazon Titan Premier"),
-    ("amazon.titan-text-express-v1", "Amazon Titan Express"),
-    ("amazon.titan-text-lite-v1", "Amazon Titan Lite"),
-    
-    # Claude
+    ("amazon.titan-text-express-v1", "Titan Text Express"),
+    ("amazon.titan-text-lite-v1", "Titan Text Lite"),
     ("anthropic.claude-3-sonnet-20240229-v1:0", "Claude 3 Sonnet"),
     ("anthropic.claude-3-haiku-20240307-v1:0", "Claude 3 Haiku"),
-    ("anthropic.claude-instant-v1", "Claude Instant"),
-    
-    # Llama
     ("meta.llama3-70b-instruct-v1:0", "Llama 3 70B"),
     ("meta.llama3-8b-instruct-v1:0", "Llama 3 8B"),
-    
-    # Mistral
+    ("meta.llama4-scout-17b-instruct-v1:0", "Llama 4 Scout 17B"),
+    ("meta.llama4-maverick-17b-instruct-v1:0", "Llama 4 Maverick 17B"),
     ("mistral.mistral-7b-instruct-v0:2", "Mistral 7B"),
-    ("mistral.mixtral-8x7b-instruct-v0:1", "Mixtral 8x7B"),
 ]
-
 def test_model(bedrock_client, model_id, model_name):
     """Test if a single model is available"""
     try:
