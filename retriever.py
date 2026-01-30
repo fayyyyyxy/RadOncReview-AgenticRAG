@@ -347,25 +347,28 @@ class RetrieverManager:
         """Execute a retrieval task and update its status."""
         task.status = TaskStatus.IN_PROGRESS
         
+        # Use task-specific top_k if provided, otherwise use default
+        top_k = task.top_k if task.top_k else None
+        
         try:
             # Select retrieval method based on strategy
             if task.retrieval_strategy == RetrievalStrategy.DENSE:
-                chunks = self.dense_search(task.query)
+                chunks = self.dense_search(task.query, top_k=top_k)
             elif task.retrieval_strategy == RetrievalStrategy.SPARSE:
-                chunks = self.sparse_search(task.query)
+                chunks = self.sparse_search(task.query, top_k=top_k)
             elif task.retrieval_strategy == RetrievalStrategy.HYBRID:
-                chunks = self.hybrid_search(task.query)
+                chunks = self.hybrid_search(task.query, top_k=top_k)
             elif task.retrieval_strategy == RetrievalStrategy.MULTI_HOP:
                 # Multi-hop: first dense, then refine
                 initial_chunks = self.dense_search(task.query, top_k=5)
                 if initial_chunks:
                     # Use top result to refine search
                     refined_query = f"{task.query} {initial_chunks[0].path}"
-                    chunks = self.hybrid_search(refined_query)
+                    chunks = self.hybrid_search(refined_query, top_k=top_k)
                 else:
                     chunks = []
             else:
-                chunks = self.hybrid_search(task.query)
+                chunks = self.hybrid_search(task.query, top_k=top_k)
             
             # Store results in task
             task.retrieved_chunks = [
