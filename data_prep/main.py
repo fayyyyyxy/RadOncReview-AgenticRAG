@@ -18,8 +18,8 @@ EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 FAISS_INDEX_FILE = "radonc_faiss_index.bin"
 
 # Chunking parameters
-max_tokens = 800
-overlap_tokens = 120
+max_tokens = 300
+overlap_tokens = 45
 
 # Setup save directory for intermediate files
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +39,38 @@ DOCUMENTS_TO_PROCESS = [
     {
         "disease_category": "Hematologic",
         "document_id": "1gKy2Hpx7FxInjOpKIBkTFJWpqhJ3I-gSXz9eRwq-NSY"
+    },
+    {
+        "disease_category": "BrainMets|Oligo|Immuno",
+        "document_id": "1CfbqB4YnaPB8U3r2LykLv2v3bRLJyYQV0tvX4Js2Mog"
+    },
+    {
+        "disease_category": "CNS|Pediatrics",
+        "document_id": "17O0LOemBhckXGuuPBCh6u8vqBfc6lg88r46B8YctMXU"
+    },
+    {
+        "disease_category": "Gastrointestinal",
+        "document_id": "13NEZCS6s13MVLixabbO2vjY73zHxJ37qE16gBbApSdY"
+    },
+    {
+        "disease_category": "Genitourinary",
+        "document_id": "1j15zXLBPWwqty60Slm2jnHEiqaoT2iw5Gapp4iMWJsw"
+    },
+    {
+        "disease_category": "Gynecology",
+        "document_id": "1X-MmBeoIl3IECEGIUVV4sFz_AR_s5AEQb8Xsx4szmJg"   
+    },
+    {
+        "disease_category": "Head&Neck|Skin",
+        "document_id": "1STZuiggtbkDIuuNMpDVSsqT2KMyp1017y8qV5Gz_GGc"   
+    },
+    {
+        "disease_category": "Hematologic",
+        "document_id": "1gKy2Hpx7FxInjOpKIBkTFJWpqhJ3I-gSXz9eRwq-NSY"
+    },
+    {
+        "disease_category": "Sarcoma",
+        "document_id": "1eal6YYRhPGwh4_R5MPQdioLZLapJBSIAXZjuO3IeU6M"
     }
 ]
 # --------------------------------------------
@@ -68,13 +100,13 @@ def process_document(doc_config, current_faiss_id):
     upload_json_to_s3(raw_json, S3_BUCKET_NAME, PROFILE_NAME, s3_raw_json_key)
     upload_json_to_s3(clean_json, S3_BUCKET_NAME, PROFILE_NAME, s3_clean_json_key)
 
-    # save_json(disease_category, "clean", save_dir, load_from_s3(S3_BUCKET_NAME, PROFILE_NAME, s3_clean_json_key))
-    # save_json(disease_category, "raw", save_dir, load_from_s3(S3_BUCKET_NAME, PROFILE_NAME, s3_raw_json_key))
+    save_json(disease_category, "clean", save_dir, load_from_s3(S3_BUCKET_NAME, PROFILE_NAME, s3_clean_json_key))
+    save_json(disease_category, "raw", save_dir, load_from_s3(S3_BUCKET_NAME, PROFILE_NAME, s3_raw_json_key))
 
     # 4. Flatten and chunk the JSON data
     token_counter_model = "text-embedding-3-large" # For estimating tokens in chunking only 
     flattened_chunks = flatten_chunk_json(clean_json, token_counter_model, max_tokens, overlap_tokens, current_faiss_id)
-    # save_json(disease_category, "chunks", save_dir, flattened_chunks)
+    save_json(disease_category, "chunks", save_dir, flattened_chunks)
 
     # The FAISS_ID for the next document starts after the last ID used here
     next_faiss_id = flattened_chunks[-1]["FAISS_ID"] + 1
@@ -84,7 +116,7 @@ def process_document(doc_config, current_faiss_id):
 
     # 6. Add embeddings
     chunk_embeddings = add_embeddings(flattened_chunks, EMBEDDING_MODEL, PROFILE_NAME, REGION) 
-    # save_json(disease_category, "chunk_embeddings", save_dir, chunk_embeddings)
+    save_json(disease_category, "chunk_embeddings", save_dir, chunk_embeddings)
 
     return chunk_embeddings, next_faiss_id
 
