@@ -158,7 +158,7 @@ Retrieved Information:
 Instructions:
 1. Provide a structured comparison addressing the question
 2. Use a table format if comparing multiple specific attributes
-3. Cite sources using [1], [2], etc.
+3. Cite sources using [1][2][3] format (separate brackets for each), never [1, 2, 3]
 4. Highlight key differences and similarities
 5. Note any guideline recommendations for choosing between options
 6. Include any safety considerations
