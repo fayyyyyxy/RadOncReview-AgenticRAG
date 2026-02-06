@@ -14,6 +14,56 @@ from models import RetrievedChunk, SubTask, RetrievalStrategy, TaskStatus
 from config import RetrieverConfig, EmbeddingConfig, AWSConfig
 
 
+class CrossEncoderReranker:
+    """Cross-Encoder model for reranking retrieved documents."""
+    
+    def __init__(self, model_name: str = "BAAI/bge-reranker-base"):
+        self.model_name = model_name
+        self._model = None
+    
+    def _load_model(self):
+        """Lazy load the cross-encoder model."""
+        if self._model is None:
+            try:
+                from sentence_transformers import CrossEncoder
+                print(f"Loading Cross-Encoder model: {self.model_name}")
+                self._model = CrossEncoder(self.model_name)
+                print("Cross-Encoder loaded successfully")
+            except ImportError:
+                print("Warning: sentence-transformers not installed. Install with: pip install sentence-transformers")
+            except Exception as e:
+                print(f"Warning: Failed to load cross-encoder: {e}")
+    
+    def rerank(self, query: str, chunks: List[RetrievedChunk], top_k: int = 10) -> List[RetrievedChunk]:
+        """Rerank chunks using cross-encoder."""
+        self._load_model()
+        
+        if self._model is None or not chunks:
+            return chunks[:top_k]
+        
+        try:
+            # Create query-document pairs
+            pairs = [[query, c.text] for c in chunks]
+            
+            # Get cross-encoder scores
+            scores = self._model.predict(pairs, show_progress_bar=False)
+            
+            # Combine chunks with scores and sort
+            scored_chunks = list(zip(chunks, scores))
+            scored_chunks.sort(key=lambda x: x[1], reverse=True)
+            
+            # Update relevance scores and return top_k
+            results = []
+            for chunk, score in scored_chunks[:top_k]:
+                chunk.relevance_score = float(score)
+                results.append(chunk)
+            
+            return results
+        except Exception as e:
+            print(f"Cross-encoder reranking failed: {e}")
+            return chunks[:top_k]
+
+
 class RetrieverManager:
     """Manages retrieval from the FAISS index and DynamoDB."""
     
@@ -37,6 +87,9 @@ class RetrieverManager:
         # FAISS index (loaded lazily)
         self._faiss_index = None
         self._faiss_index_loaded = False
+        
+        # Cross-Encoder for reranking
+        self._cross_encoder = CrossEncoderReranker()
     
     def _load_faiss_index(self) -> faiss.Index:
         """Load FAISS index from S3."""
@@ -294,25 +347,28 @@ class RetrieverManager:
         """Execute a retrieval task and update its status."""
         task.status = TaskStatus.IN_PROGRESS
         
+        # Use task-specific top_k if provided, otherwise use default
+        top_k = task.top_k if task.top_k else None
+        
         try:
             # Select retrieval method based on strategy
             if task.retrieval_strategy == RetrievalStrategy.DENSE:
-                chunks = self.dense_search(task.query)
+                chunks = self.dense_search(task.query, top_k=top_k)
             elif task.retrieval_strategy == RetrievalStrategy.SPARSE:
-                chunks = self.sparse_search(task.query)
+                chunks = self.sparse_search(task.query, top_k=top_k)
             elif task.retrieval_strategy == RetrievalStrategy.HYBRID:
-                chunks = self.hybrid_search(task.query)
+                chunks = self.hybrid_search(task.query, top_k=top_k)
             elif task.retrieval_strategy == RetrievalStrategy.MULTI_HOP:
                 # Multi-hop: first dense, then refine
                 initial_chunks = self.dense_search(task.query, top_k=5)
                 if initial_chunks:
                     # Use top result to refine search
                     refined_query = f"{task.query} {initial_chunks[0].path}"
-                    chunks = self.hybrid_search(refined_query)
+                    chunks = self.hybrid_search(refined_query, top_k=top_k)
                 else:
                     chunks = []
             else:
-                chunks = self.hybrid_search(task.query)
+                chunks = self.hybrid_search(task.query, top_k=top_k)
             
             # Store results in task
             task.retrieved_chunks = [
@@ -349,25 +405,11 @@ class RetrieverManager:
         chunks: List[RetrievedChunk],
         top_k: Optional[int] = None
     ) -> List[RetrievedChunk]:
-        """Rerank chunks using cross-encoder style scoring (simplified)."""
+        """Rerank chunks using Cross-Encoder model."""
         top_k = top_k or self.config.rerank_top_k
         
-        # For now, use a simple relevance heuristic
-        # In production, use a cross-encoder model
-        
-        for chunk in chunks:
-            # Boost score based on query term overlap in path
-            query_terms = set(query.lower().split())
-            path_terms = set(chunk.path.lower().split())
-            
-            overlap = len(query_terms & path_terms)
-            boost = 1 + (overlap * 0.1)
-            
-            chunk.relevance_score = chunk.similarity_score * boost
-        
-        # Sort by relevance score
-        chunks.sort(key=lambda x: x.relevance_score, reverse=True)
-        return chunks[:top_k]
+        # Use Cross-Encoder for reranking
+        return self._cross_encoder.rerank(query, chunks, top_k)
 
 
 class MockRetrieverManager:

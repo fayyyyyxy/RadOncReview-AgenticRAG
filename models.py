@@ -60,6 +60,7 @@ class SubTask:
     result: Optional[str] = None
     retrieved_chunks: List[Dict] = field(default_factory=list)
     relevance_scores: List[float] = field(default_factory=list)
+    top_k: Optional[int] = None  # Limit retrieval count (for comparison queries)
 
 
 @dataclass

@@ -73,10 +73,21 @@ class BedrockLLMClient(BaseLLMClient):
             }
             
         elif "meta" in self.config.model_id or "llama" in self.config.model_id.lower():
-            # Llama
-            full_prompt = prompt
+            # Llama 3 format (different from Llama 2)
             if system_prompt:
-                full_prompt = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{prompt} [/INST]"
+                full_prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"""
+            else:
+                full_prompt = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+
+{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"""
             request_body = {
                 "prompt": full_prompt,
                 "max_gen_len": self.config.max_tokens,

@@ -85,6 +85,9 @@ class TaskPlanner:
         
         sub_tasks = []
         
+        # Limit top_k for comparison to avoid exceeding token limit
+        comparison_top_k = 10  # Reduced from default to prevent token overflow
+        
         if comparison_pairs:
             for item1, item2 in comparison_pairs:
                 # Task for first item
@@ -93,7 +96,8 @@ class TaskPlanner:
                     description=f"Retrieve information about {item1}",
                     query=f"{analysis.disease_category or ''} {item1}".strip(),
                     retrieval_strategy=RetrievalStrategy.DENSE,
-                    status=TaskStatus.PENDING
+                    status=TaskStatus.PENDING,
+                    top_k=comparison_top_k  # Limit retrieval count
                 ))
                 
                 # Task for second item
@@ -102,7 +106,8 @@ class TaskPlanner:
                     description=f"Retrieve information about {item2}",
                     query=f"{analysis.disease_category or ''} {item2}".strip(),
                     retrieval_strategy=RetrievalStrategy.DENSE,
-                    status=TaskStatus.PENDING
+                    status=TaskStatus.PENDING,
+                    top_k=comparison_top_k  # Limit retrieval count
                 ))
         else:
             # Fallback: single comprehensive search
@@ -111,7 +116,8 @@ class TaskPlanner:
                 description="Retrieve comparison information",
                 query=analysis.original_query,
                 retrieval_strategy=RetrievalStrategy.HYBRID,
-                status=TaskStatus.PENDING
+                status=TaskStatus.PENDING,
+                top_k=comparison_top_k  # Limit retrieval count
             ))
         
         return TaskPlan(
