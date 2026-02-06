@@ -18,6 +18,7 @@ from retriever import RetrieverManager, MockRetrieverManager
 from synthesizer import ResponseSynthesizer, SelfCritic
 from guardrails import GuardrailManager
 from models import RetrievedChunk
+from llm_judge import create_llm_judge, LLMJudge
 
 
 class AgenticRAGEngine:
@@ -67,6 +68,12 @@ class AgenticRAGEngine:
         self.synthesizer = ResponseSynthesizer(self.llm, self.config)
         self.self_critic = SelfCritic(self.llm, self.config.agent)
         self.guardrails = GuardrailManager(self.config.guardrail)
+        
+        # Initialize LLM Judge (only if not using mock)
+        if not use_mock:
+            self.judge = create_llm_judge(self.config.aws)
+        else:
+            self.judge = None
         
         # State
         self.conversation_history = []
@@ -396,6 +403,56 @@ class AgenticRAGEngine:
             },
             latency_ms=latency_ms
         )
+        
+        # ========== Step 8: LLM Judge Evaluation ==========
+        if self.judge is not None:
+            self._log_reasoning("JUDGE", "Evaluating answer quality with LLM judges")
+            
+            # Extract retrieved context texts for evaluation
+            if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
+                # Collect all contexts from multi-topic chunks
+                retrieved_texts = []
+                for topic_chunks in chunks_by_topic.values():
+                    for chunk in topic_chunks[:3]:  # Top 3 per topic
+                        retrieved_texts.append(chunk.get("text", ""))
+            else:
+                # Collect contexts from all_chunks
+                retrieved_texts = [
+                    chunk.get("text", "") 
+                    for chunk in all_chunks[:5]  # Top 5 chunks
+                ]
+            
+            try:
+                judge_evaluations = self.judge.evaluate(
+                    query=user_query,
+                    answer=final_answer,
+                    retrieved_contexts=retrieved_texts
+                )
+                
+                # Store evaluations in response metadata
+                response.metadata["judge_evaluations"] = [
+                    {
+                        "model_name": eval.model_name,
+                        "accuracy": eval.accuracy.score,
+                        "accuracy_reasoning": eval.accuracy.reasoning,
+                        "completeness": eval.completeness.score,
+                        "completeness_reasoning": eval.completeness.reasoning,
+                        "retrieval_adherence": eval.retrieval_adherence.score,
+                        "retrieval_adherence_reasoning": eval.retrieval_adherence.reasoning,
+                        "overall_score": eval.overall_score,
+                        "overall_reasoning": eval.overall_reasoning,
+                        "evaluation_time_ms": eval.evaluation_time_ms
+                    }
+                    for eval in judge_evaluations
+                ]
+                
+                self._log_reasoning("JUDGE", 
+                    f"Evaluation complete - Average overall score: "
+                    f"{sum(e.overall_score for e in judge_evaluations) / len(judge_evaluations):.2f}/5.00"
+                )
+            except Exception as e:
+                self._log_reasoning("JUDGE", f"Evaluation failed: {str(e)}")
+                response.metadata["judge_evaluations"] = []
         
         # Store in conversation history
         self.conversation_history.append({
