@@ -18,12 +18,17 @@ def main():
     print("=" * 60)
     print("  RadOnc Agentic RAG - Interactive Chat")
     print("=" * 60)
-    print("\nConnecting to AWS...")
+    print("\nInitializing system...")
+    print("  - Connecting to AWS...")
+    print("  - Loading cross-encoder model...")
     
     try:
         # Create agent with real AWS connection
         agent = create_agent(use_mock=False)
-        print("Connected successfully!\n")
+        print("\n System ready!")
+        print("  - AWS connected")
+        print("  - Cross-encoder model loaded")
+        print()
     except Exception as e:
         print(f"ERROR: Failed to connect to AWS: {e}")
         print("\nPlease ensure:")

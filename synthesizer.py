@@ -9,7 +9,7 @@ from models import (
     SelfCritiqueResult, QueryAnalysis
 )
 from llm_client import BaseLLMClient
-from config import AgentConfig
+from config import AgentConfig, Config
 
 
 class ResponseSynthesizer:
@@ -19,15 +19,17 @@ class ResponseSynthesizer:
 Your role is to provide accurate, guideline-based answers to clinical questions.
 
 Guidelines for your responses:
-1. Be concise but comprehensive
-2. Always cite your sources using [1], [2], etc.
-3. Use standard medical terminology
-4. If information is incomplete or uncertain, clearly state this
-5. Never make up information - only use what's provided in the context
-6. Highlight any safety-critical information
-7. Structure complex answers with clear sections"""
+1. **Directly answer the specific question asked - avoid tangential information**
+2. Be concise and focused - only include what's necessary to answer the question
+3. Always cite your sources using [1], [2], etc.
+4. Use standard medical terminology
+5. If information is incomplete or uncertain, clearly state this
+6. Never make up information - only use what's provided in the context
+7. Highlight any safety-critical information
+8. For specific clinical scenarios or rare conditions, focus on the exact scenario mentioned"""
 
-    def __init__(self, llm_client: BaseLLMClient, config: AgentConfig):
+
+    def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
     
@@ -96,11 +98,13 @@ Retrieved Information:
 {context}
 
 Instructions:
-1. Synthesize the information to directly answer the question
-2. Cite sources using [1], [2], etc. for each claim
-3. If the retrieved information is insufficient, clearly state what's missing
-4. Highlight any important safety considerations
-5. Be concise but thorough
+1. **Answer the EXACT question asked - focus on the specific scenario or condition mentioned**
+2. Prioritize the most directly relevant information from the sources
+3. Be concise - aim for 3-5 sentences unless the question requires more detail
+4. Cite sources using [1], [2], etc. (use separate brackets for each citation)
+5. Only include general background information if the specific question is fully addressed first
+6. If key information is missing from the sources, state what's missing
+7. Highlight any important safety considerations
 
 Answer:"""
         
@@ -121,13 +125,13 @@ Answer:"""
         
         return answer, used_citations, confidence
     
-    def synthesize_comparison(
+    def synthesize_multi_topic(
         self,
         query: str,
         analysis: QueryAnalysis,
         chunks_by_topic: Dict[str, List[Dict]]
     ) -> tuple[str, List[Citation], float]:
-        """Synthesize a comparison answer from multiple retrieval results."""
+        """Synthesize an answer from multiple retrieval results."""
         
         # Format context for each topic
         context_parts = []
@@ -146,24 +150,28 @@ Answer:"""
             all_citations.extend(topic_citations)
         
         full_context = "\n\n".join(context_parts)
+
+        synthesis_prompt = f"""
+        Answer the following clinical question using the grouped information below.
+
+        Question: {query}
+
+        Retrieved Information:
+        {full_context}
+
+        Instructions:
+        1. Directly answer the question using ALL relevant subtopics
+        2. Integrate information across subtopics where needed
+        3. Be concise and clinically focused
+        4. Use bullet points or tables if it improves clarity
+        5. Cite sources using [1], [2], [3] format (separate brackets for each citation), never [1, 2, 3]
+        6. Preserve distinctions between subtopics when relevant
+        7. Highlight key differences or relationships if the question involves comparison
+        8. Note any guideline recommendations or safety considerations
+
+        Answer:
+        """
         
-        # Build comparison synthesis prompt
-        synthesis_prompt = f"""Compare and contrast the following based on the retrieved information.
-
-Question: {query}
-
-Retrieved Information:
-{full_context}
-
-Instructions:
-1. Provide a structured comparison addressing the question
-2. Use a table format if comparing multiple specific attributes
-3. Cite sources using [1][2][3] format (separate brackets for each), never [1, 2, 3]
-4. Highlight key differences and similarities
-5. Note any guideline recommendations for choosing between options
-6. Include any safety considerations
-
-Comparison:"""
         
         answer = self.llm.generate(synthesis_prompt, self.SYSTEM_PROMPT)
         
@@ -185,7 +193,7 @@ class SelfCritic:
     CRITIQUE_PROMPT = """You are a radiation oncology expert reviewer. 
 Evaluate the following answer for completeness, accuracy, and safety."""
     
-    def __init__(self, llm_client: BaseLLMClient, config: AgentConfig):
+    def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
     

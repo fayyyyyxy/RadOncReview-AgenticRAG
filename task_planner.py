@@ -11,7 +11,7 @@ from models import (
     RetrievalStrategy, QueryIntent
 )
 from llm_client import BaseLLMClient
-from config import AgentConfig
+from config import Config
 
 
 class TaskPlanner:
@@ -25,12 +25,12 @@ class TaskPlanner:
         QueryIntent.STAGING: RetrievalStrategy.DENSE,  # Keyword-heavy
         QueryIntent.INDICATIONS: RetrievalStrategy.DENSE,
         QueryIntent.CONTRAINDICATIONS: RetrievalStrategy.DENSE,
-        QueryIntent.COMPARISON: RetrievalStrategy.MULTI_HOP,
+        QueryIntent.COMPARISON: RetrievalStrategy.DENSE,
         QueryIntent.DEFINITION: RetrievalStrategy.DENSE,
         QueryIntent.GENERAL: RetrievalStrategy.DENSE,
     }
     
-    def __init__(self, llm_client: BaseLLMClient, config: AgentConfig):
+    def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
     
@@ -70,9 +70,9 @@ class TaskPlanner:
             sub_tasks=[sub_task],
             reasoning="Simple query - single retrieval task sufficient."
         )
-    
+    """
     def _create_comparison_plan(self, analysis: QueryAnalysis) -> TaskPlan:
-        """Create a multi-task plan for comparison queries."""
+        #Create a multi-task plan for comparison queries.
         # Extract comparison targets from query
         query_lower = analysis.original_query.lower()
         
@@ -85,8 +85,7 @@ class TaskPlanner:
         
         sub_tasks = []
         
-        # Limit top_k for comparison to avoid exceeding token limit
-        comparison_top_k = 10  # Reduced from default to prevent token overflow
+        comparison_top_k = self.config.retriever.comparison_top_k 
         
         if comparison_pairs:
             for item1, item2 in comparison_pairs:
@@ -127,27 +126,26 @@ class TaskPlanner:
             sub_tasks=sub_tasks,
             reasoning="Comparison query - separate retrievals for each item being compared."
         )
-    
+    """
+
     def plan(self, analysis: QueryAnalysis) -> TaskPlan:
         """Create an execution plan based on query analysis (rule-based)."""
-        # Comparison queries need multiple retrievals
-        if analysis.intent == QueryIntent.COMPARISON:
-            return self._create_comparison_plan(analysis)
-        
-        # Complex queries may need decomposition
-        if analysis.is_complex:
+        # Both comparison and complex queries use LLM planning
+        if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
             return self._plan_with_llm(analysis)
         
         # Simple queries get a single-task plan
         return self._create_simple_plan(analysis)
     
+        
     def _plan_with_llm(self, analysis: QueryAnalysis) -> TaskPlan:
         """Use LLM to create a plan for complex queries."""
         system_prompt = """You are a radiation oncology query planner. 
 Your job is to break down complex clinical questions into simpler sub-tasks 
 that can be answered by searching a knowledge base of treatment guidelines."""
         
-        planning_prompt = f"""Break down this radiation oncology query into sub-tasks:
+        ### IMPORTANT FOR FUTURE CHANGES: (sparse and hybrid strategies are currently being optimized and will be re-enabled in future versions)
+        planning_prompt = f"""Break down this radiation oncology query into sub-tasks for retrieval:
 
 Original Query: "{analysis.original_query}"
 
@@ -157,22 +155,38 @@ Query Analysis:
 - Treatment Modality: {analysis.treatment_modality or "Not specified"}
 - Key Entities: {", ".join(analysis.key_entities) if analysis.key_entities else "None"}
 
-Create a plan with 1-4 sub-tasks. Each sub-task should:
-1. Be a focused search query
-2. Contribute to answering the original question
-3. Be independent (can be executed in parallel)
+TASK GENERATION GUIDELINES:
+1. Generate the MOST APPROPRIATE number of sub-tasks based on the query (typically 2-3)
+2. Each sub-task should retrieve DISTINCT information needed to answer the query
+3. Maximum 3 sub-tasks - ensure these 3 tasks comprehensively cover all information needed
+4. Each sub-task should be focused and specific
+5. Sub-tasks should be independent (can be executed in parallel)
+
+For comparison queries (e.g., "Compare A vs B"):
+- Create 2 tasks: one focused on A, one focused on B
+- Each task should retrieve comprehensive information about that option
+
+For complex queries with multiple aspects:
+- Identify 2-3 key information needs
+- Create one task per key information need
+- Ensure tasks together cover the full query scope
+
+RETRIEVAL STRATEGY:
+- Always use "dense" strategy 
 
 Respond in JSON format:
 {{
-    "reasoning": "<explanation of your decomposition strategy>",
+    "reasoning": "<explanation of your decomposition strategy and why this number of tasks>",
     "sub_tasks": [
         {{
             "description": "<what this task will find>",
             "query": "<search query for knowledge base>",
-            "strategy": "<dense|sparse|hybrid>"
+            "strategy": "dense"
         }}
     ]
-}}"""
+}}
+
+Remember: Generate the optimal number of tasks (2-3) that comprehensively cover information retrieval needs."""
         
         try:
             result = self.llm.generate_structured(
@@ -186,21 +200,37 @@ Respond in JSON format:
             
             if "error" not in result and "sub_tasks" in result:
                 sub_tasks = []
-                for i, task in enumerate(result["sub_tasks"]):
-                    strategy_map = {
-                        "dense": RetrievalStrategy.DENSE,
-                        "sparse": RetrievalStrategy.SPARSE,
-                        "hybrid": RetrievalStrategy.HYBRID
-                    }
+                # Safety limit: Cap at 3 tasks (LLM should generate appropriate number, this is safeguard)
+                tasks_to_process = result["sub_tasks"][:3]
+                num_tasks = len(tasks_to_process)
+                
+                if num_tasks in [2, 3]:
+                    task_top_k = self.config.retriever.complex_top_k
+                else:
+                    # Fallback or single task
+                    task_top_k = None  # Will use default
+                
+                for i, task in enumerate(tasks_to_process):
+                    # NOTE: Currently using DENSE strategy exclusively
+                    # TODO: Re-enable sparse and hybrid strategies after optimization
+                    # Once re-enabled, uncomment the strategy_map logic below:
+                    #
+                    # strategy_map = {
+                    #     "dense": RetrievalStrategy.DENSE,
+                    #     "sparse": RetrievalStrategy.SPARSE,
+                    #     "hybrid": RetrievalStrategy.HYBRID
+                    # }
+                    # strategy = strategy_map.get(task.get("strategy", "dense"), RetrievalStrategy.DENSE)
+                    
+                    # TEMPORARY: Force DENSE strategy for all tasks
+                    strategy = RetrievalStrategy.DENSE
                     
                     sub_tasks.append(SubTask(
                         task_id=self._create_task_id(),
                         description=task.get("description", f"Sub-task {i+1}"),
                         query=task.get("query", analysis.original_query),
-                        retrieval_strategy=strategy_map.get(
-                            task.get("strategy", "hybrid"), 
-                            RetrievalStrategy.HYBRID
-                        ),
+                        retrieval_strategy=strategy,  # Always DENSE for now
+                        top_k=task_top_k,  # Use task-specific top_k
                         status=TaskStatus.PENDING
                     ))
                 
