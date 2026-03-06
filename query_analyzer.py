@@ -7,7 +7,7 @@ from typing import Optional, List, Tuple
 
 from models import QueryAnalysis, QueryIntent
 from llm_client import BaseLLMClient
-from config import AgentConfig
+from config import AgentConfig, Config
 
 
 class QueryAnalyzer:
@@ -49,18 +49,22 @@ class QueryAnalyzer:
     
     # Disease category patterns
     DISEASE_PATTERNS = {
+        "BrainMets": [r'\bbrain metastas', r'\bbrain mets\b', r'\bCNS metastas'],
+        "Oligo": [r'\boligomet', r'\boligo[-\s]?met', r'\blimited metast'],
+        "Immuno": [r'\bimmunotherap', r'\bcheckpoint inhibitor', r'\bPD-1\b', r'\bPD-L1\b', r'\bCTLA-4\b', r'\bnivolumab\b', r'\bpembrolizumab\b', r'\batezolizumab\b', r'\bipilimumab\b', r'\bCAR[-\s]?T\b'],
         "Breast": [r'\bbreast\b', r'\bmammary\b', r'\bDCIS\b', r'\bIDC\b', r'\bILC\b'],
-        "Thorax": [r'\blung\b', r'\bNSCLC\b', r'\bSCLC\b', r'\bthora', r'\bmesothelioma\b', r'\bthymoma\b'],
-        "Hematologic": [r'\bleukemia\b', r'\blymphoma\b', r'\bmyeloma\b', r'\bhodgkin', r'\bTBI\b'],
-        "CNS": [r'\bbrain\b', r'\bglioma\b', r'\bmeningioma\b', r'\bGBM\b', r'\bcranial\b', r'\bspinal\b'],
-        "GI": [r'\besophag', r'\bgastric\b', r'\bpancrea', r'\bliver\b', r'\brectal\b', r'\banal\b', r'\bcolon\b'],
-        "GU": [r'\bprostate\b', r'\bbladder\b', r'\brenal\b', r'\bkidney\b', r'\btesticular\b'],
-        "Gynecologic": [r'\bcervic', r'\buterine\b', r'\bendometri', r'\bovarian\b', r'\bvulvar\b', r'\bvaginal\b'],
-        "Head_Neck": [r'\bhead\s*(and|&)\s*neck\b', r'\bH&?N\b', r'\blaryn', r'\bpharyn', r'\boral\b', r'\bnasopharyn'],
-        "Pediatric": [r'\bpediatric\b', r'\bchild', r'\bneuroblastoma\b', r'\bwilms\b', r'\brhabdomyosarcoma\b'],
-        "Sarcoma": [r'\bsarcoma\b', r'\bsoft\s+tissue\b', r'\bbone\s+(cancer|tumor)\b'],
-        "Skin": [r'\bmelanoma\b', r'\bskin\b', r'\bsquamous\s+cell\b', r'\bbasal\s+cell\b', r'\bmerkel\b']
+        "CNS": [r'\bglioma\b', r'\bGBM\b', r'\bmeningioma\b', r'\bspinal cord\b', r'\bprimary brain\b'],
+        "Pediatrics": [r'\bpediatric\b', r'\bchildhood\b', r'\bneuroblastoma\b', r'\bwilms\b', r'\brhabdomyosarcoma\b'],
+        "Gastrointestinal": [r'\besophag', r'\bgastric\b', r'\bpancrea', r'\bhepatocellular\b', r'\bliver\b', r'\bcolorectal\b', r'\bcolon\b', r'\brectal\b', r'\banal\b'],
+        "Genitourinary": [r'\bprostate\b', r'\bbladder\b', r'\brenal\b', r'\bkidney\b', r'\btesticular\b'],
+        "Gynecology": [r'\bcervic', r'\buterine\b', r'\bendometri', r'\bovarian\b', r'\bvulvar\b', r'\bvaginal\b'],
+        "Head & Neck": [r'\bhead\s*(and|&)\s*neck\b', r'\bH&N\b', r'\boropharyn', r'\bnasopharyn', r'\blaryn', r'\boral cavity\b'],
+        "Skin": [r'\bmelanoma\b', r'\bmerkel\b', r'\bbasal cell\b', r'\bsquamous cell\b'],
+        "Hematologic": [r'\bleukemia\b', r'\blymphoma\b', r'\bmyeloma\b', r'\bhodgkin'],
+        "Sarcoma": [r'\bsarcoma\b', r'\bsoft tissue\b', r'\bosteosarcoma\b', r'\bEwing\b'],
+        "Thorax": [r'\blung\b', r'\bNSCLC\b', r'\bSCLC\b', r'\bmesothelioma\b', r'\bthymoma\b']
     }
+
     
     # Treatment modality patterns
     MODALITY_PATTERNS = {
@@ -76,7 +80,7 @@ class QueryAnalyzer:
         "TSEI": [r'\bTSEI\b', r'\btotal\s+skin\s+electron\b']
     }
     
-    def __init__(self, llm_client: BaseLLMClient, config: AgentConfig):
+    def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
     
@@ -198,7 +202,7 @@ Be precise and use standard medical terminology."""
 Extract the following information in JSON format:
 {{
     "intent": "<one of: treatment_protocol, dose_fractionation, side_effects, staging, indications, contraindications, comparison, definition, general>",
-    "disease_category": "<one of: Breast, Thorax, Hematologic, CNS, GI, GU, Gynecologic, Head_Neck, Pediatric, Sarcoma, Skin, or null>",
+    "disease_category": "<one of: BrainMets, Oligo, Immuno, Breast, CNS, Pediatrics, Gastrointestinal, Genitourinary, Gynecology, Head & Neck, Skin, Hematologic, Sarcoma, Thorax, or null>"
     "treatment_modality": "<one of: EBRT, IMRT, VMAT, SRS, SBRT, Brachytherapy, Proton, Electron, TBI, TSEI, or null>",
     "key_entities": ["<list of key medical terms, doses, stages, anatomical structures>"],
     "temporal_context": "<e.g., adjuvant, neoadjuvant, definitive, palliative, postoperative, or null>",

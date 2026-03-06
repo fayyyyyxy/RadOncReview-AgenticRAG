@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RadOnc AI - Radiation Oncology Assistant</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --primary:#667eea;--secondary:#764ba2;--accent:#a78bfa;
+  --glass-bg:rgba(255,255,255,0.07);--glass-bg-hover:rgba(255,255,255,0.12);
+  --glass-border:rgba(255,255,255,0.15);--glass-border-strong:rgba(255,255,255,0.25);
+  --text-primary:rgba(255,255,255,0.95);--text-secondary:rgba(255,255,255,0.6);
+  --text-muted:rgba(255,255,255,0.35);
+  --blur:20px;--radius:16px;--radius-sm:10px;--radius-xs:8px;
+  --sidebar-w:300px;--header-h:64px;
+  --font:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display',system-ui,'Segoe UI',sans-serif;
+}
+html,body{height:100%;overflow:hidden;font-family:var(--font);color:var(--text-primary);line-height:1.6}
+
+/* ============ Background ============ */
+body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);position:relative}
+.bg-gradient{position:fixed;inset:0;z-index:0;overflow:hidden}
+.bg-gradient::before{
+  content:'';position:absolute;inset:-50%;
+  background:linear-gradient(135deg,#667eea22 0%,#764ba222 30%,transparent 60%);
+  animation:bgShift 20s ease-in-out infinite alternate;
+}
+@keyframes bgShift{0%{transform:translate(0,0) rotate(0deg)}100%{transform:translate(5%,3%) rotate(3deg)}}
+
+.orb{position:absolute;border-radius:50%;filter:blur(60px);opacity:0.35;pointer-events:none}
+.orb-1{width:500px;height:500px;background:radial-gradient(circle,#667eea,transparent 70%);top:-10%;left:-5%;animation:float1 25s ease-in-out infinite}
+.orb-2{width:400px;height:400px;background:radial-gradient(circle,#764ba2,transparent 70%);bottom:-8%;right:-5%;animation:float2 20s ease-in-out infinite}
+.orb-3{width:250px;height:250px;background:radial-gradient(circle,#a78bfa,transparent 70%);top:40%;right:10%;animation:float3 18s ease-in-out infinite}
+.orb-4{width:350px;height:350px;background:radial-gradient(circle,#667eea88,transparent 70%);top:60%;left:20%;animation:float4 22s ease-in-out infinite}
+.orb-5{width:200px;height:200px;background:radial-gradient(circle,#764ba288,transparent 70%);top:15%;right:30%;animation:float5 15s ease-in-out infinite}
+@keyframes float1{0%,100%{transform:translate(0,0)}50%{transform:translate(40px,30px)}}
+@keyframes float2{0%,100%{transform:translate(0,0)}50%{transform:translate(-30px,-40px)}}
+@keyframes float3{0%,100%{transform:translate(0,0)}50%{transform:translate(-20px,25px)}}
+@keyframes float4{0%,100%{transform:translate(0,0)}50%{transform:translate(25px,-20px)}}
+@keyframes float5{0%,100%{transform:translate(0,0)}50%{transform:translate(-15px,-30px)}}
+
+/* ============ Layout ============ */
+.app{display:flex;height:100vh;position:relative;z-index:1}
+
+/* ============ Sidebar ============ */
+.sidebar{
+  width:var(--sidebar-w);min-width:var(--sidebar-w);height:100%;
+  background:var(--glass-bg);backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur));
+  border-right:1px solid var(--glass-border);
+  display:flex;flex-direction:column;padding:20px 16px;
+  transition:transform .3s ease,opacity .3s ease;
+  overflow-y:auto;overflow-x:hidden;
+}
+.sidebar.collapsed{transform:translateX(-100%);opacity:0;position:absolute;z-index:10}
+.sidebar-header{display:flex;align-items:center;gap:12px;margin-bottom:24px;padding:4px 0}
+.logo{
+  width:42px;height:42px;border-radius:12px;
+  background:linear-gradient(135deg,var(--primary),var(--secondary));
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 15px rgba(102,126,234,0.4);flex-shrink:0;
+}
+.logo svg{width:24px;height:24px;fill:white}
+.logo-text{display:flex;flex-direction:column}
+.logo-title{font-size:16px;font-weight:700;letter-spacing:0.3px;line-height:1.2}
+.logo-subtitle{font-size:11px;color:var(--text-secondary);letter-spacing:0.2px}
+
+.btn-new-chat{
+  width:100%;padding:12px 16px;border-radius:var(--radius-sm);border:1px dashed var(--glass-border-strong);
+  background:transparent;color:var(--text-primary);font-size:14px;cursor:pointer;
+  display:flex;align-items:center;gap:8px;transition:all .2s;font-family:var(--font);
+}
+.btn-new-chat:hover{background:var(--glass-bg-hover);border-color:var(--primary)}
+.btn-new-chat svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2}
+
+.sidebar-section{margin-top:28px}
+.sidebar-section-title{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:12px;padding:0 4px}
+.suggestion-card{
+  padding:12px 14px;border-radius:var(--radius-xs);cursor:pointer;
+  background:transparent;border:1px solid transparent;
+  transition:all .2s;margin-bottom:6px;
+}
+.suggestion-card:hover{background:var(--glass-bg-hover);border-color:var(--glass-border)}
+.suggestion-card .label{font-size:13px;color:var(--text-primary);line-height:1.4}
+.suggestion-card .tag{
+  display:inline-block;font-size:10px;color:var(--accent);
+  background:rgba(167,139,250,0.12);padding:2px 8px;border-radius:20px;margin-top:6px;
+}
+
+.category-tags{display:flex;flex-wrap:wrap;gap:6px}
+.category-tag{
+  font-size:11px;padding:5px 12px;border-radius:20px;
+  background:var(--glass-bg);border:1px solid var(--glass-border);
+  color:var(--text-secondary);cursor:pointer;transition:all .2s;
+}
+.category-tag:hover{background:var(--glass-bg-hover);color:var(--text-primary);border-color:var(--primary)}
+
+.sidebar-footer{margin-top:auto;padding-top:20px;border-top:1px solid var(--glass-border)}
+.status-indicator{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:#4ade80;box-shadow:0 0 8px rgba(74,222,128,0.5);flex-shrink:0}
+.status-dot.offline{background:#f87171;box-shadow:0 0 8px rgba(248,113,113,0.5)}
+
+/* ============ Main Chat Area ============ */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
+
+.chat-header{
+  height:var(--header-h);min-height:var(--header-h);
+  background:var(--glass-bg);backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur));
+  border-bottom:1px solid var(--glass-border);
+  display:flex;align-items:center;justify-content:space-between;padding:0 24px;
+}
+.chat-header-left{display:flex;align-items:center;gap:12px}
+.btn-toggle-sidebar{
+  display:none;width:36px;height:36px;border-radius:var(--radius-xs);
+  border:1px solid var(--glass-border);background:var(--glass-bg);
+  color:var(--text-primary);cursor:pointer;align-items:center;justify-content:center;
+  transition:all .2s;
+}
+.btn-toggle-sidebar:hover{background:var(--glass-bg-hover)}
+.btn-toggle-sidebar svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2}
+.chat-header-title{font-size:15px;font-weight:600}
+.chat-header-badge{
+  font-size:10px;padding:3px 10px;border-radius:20px;
+  background:linear-gradient(135deg,rgba(102,126,234,0.2),rgba(118,75,162,0.2));
+  border:1px solid rgba(102,126,234,0.3);color:var(--accent);
+}
+.chat-header-right{display:flex;align-items:center;gap:8px}
+.header-btn{
+  width:36px;height:36px;border-radius:var(--radius-xs);
+  border:1px solid var(--glass-border);background:transparent;
+  color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:all .2s;
+}
+.header-btn:hover{background:var(--glass-bg-hover);color:var(--text-primary)}
+.header-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2}
+
+/* ============ Messages Area ============ */
+.messages{flex:1;overflow-y:auto;padding:24px;scroll-behavior:smooth}
+.messages::-webkit-scrollbar{width:6px}
+.messages::-webkit-scrollbar-track{background:transparent}
+.messages::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:3px}
+.messages::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.2)}
+
+/* ============ Welcome Screen ============ */
+.welcome{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:100%;text-align:center;padding:40px 20px;animation:fadeIn .6s ease;
+}
+.welcome-icon{
+  width:80px;height:80px;border-radius:24px;margin-bottom:24px;
+  background:linear-gradient(135deg,var(--primary),var(--secondary));
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 8px 30px rgba(102,126,234,0.4);
+}
+.welcome-icon svg{width:44px;height:44px;fill:white}
+.welcome h1{font-size:28px;font-weight:700;margin-bottom:8px;background:linear-gradient(135deg,#fff,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.welcome p{font-size:15px;color:var(--text-secondary);max-width:480px;margin-bottom:36px;line-height:1.7}
+.welcome-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:600px}
+.welcome-card{
+  padding:16px 18px;border-radius:var(--radius-sm);text-align:left;cursor:pointer;
+  background:var(--glass-bg);border:1px solid var(--glass-border);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  transition:all .25s;
+}
+.welcome-card:hover{background:var(--glass-bg-hover);border-color:var(--glass-border-strong);transform:translateY(-2px)}
+.welcome-card .icon{font-size:20px;margin-bottom:8px}
+.welcome-card .title{font-size:13px;font-weight:600;margin-bottom:4px}
+.welcome-card .desc{font-size:12px;color:var(--text-secondary);line-height:1.5}
+
+/* ============ Message Bubbles ============ */
+.message{display:flex;gap:12px;margin-bottom:24px;animation:slideUp .3s ease}
+.message.user{flex-direction:row-reverse}
+.message-avatar{
+  width:36px;height:36px;border-radius:12px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:16px;
+  margin-top:2px;
+}
+.message.user .message-avatar{
+  background:linear-gradient(135deg,var(--primary),var(--secondary));
+  box-shadow:0 2px 10px rgba(102,126,234,0.3);
+}
+.message.assistant .message-avatar{
+  background:var(--glass-bg);border:1px solid var(--glass-border);
+}
+.message-avatar svg{width:20px;height:20px;fill:white}
+.message-content{max-width:75%;min-width:0}
+.message.user .message-content{display:flex;flex-direction:column;align-items:flex-end}
+.message-bubble{
+  padding:14px 18px;border-radius:var(--radius);position:relative;
+  word-wrap:break-word;overflow-wrap:break-word;
+}
+.message.user .message-bubble{
+  background:linear-gradient(135deg,rgba(102,126,234,0.25),rgba(118,75,162,0.25));
+  border:1px solid rgba(102,126,234,0.3);
+  border-top-right-radius:4px;
+}
+.message.assistant .message-bubble{
+  background:var(--glass-bg);backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur));
+  border:1px solid var(--glass-border);border-top-left-radius:4px;
+}
+.message-bubble p{margin:0 0 12px;font-size:14px;line-height:1.75}
+.message-bubble p:last-child{margin-bottom:0}
+.message-bubble strong{color:white;font-weight:600}
+.message-bubble em{color:var(--accent);font-style:italic}
+.message-bubble ul,.message-bubble ol{margin:8px 0 12px 20px;font-size:14px}
+.message-bubble li{margin-bottom:6px;line-height:1.6}
+.message-bubble code{
+  background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:4px;
+  font-size:13px;font-family:'SF Mono',Menlo,monospace;
+}
+.message-bubble pre{
+  background:rgba(0,0,0,0.3);border:1px solid var(--glass-border);
+  border-radius:var(--radius-xs);padding:14px;margin:12px 0;overflow-x:auto;
+}
+.message-bubble pre code{background:none;padding:0;font-size:13px;line-height:1.5}
+.message-bubble h1,.message-bubble h2,.message-bubble h3,.message-bubble h4{
+  margin:16px 0 8px;font-weight:600;
+}
+.message-bubble h3{font-size:15px}
+.message-bubble h4{font-size:14px}
+.message-bubble table{
+  width:100%;border-collapse:collapse;margin:12px 0;font-size:13px;
+}
+.message-bubble th,.message-bubble td{
+  padding:8px 12px;border:1px solid var(--glass-border);text-align:left;
+}
+.message-bubble th{background:rgba(255,255,255,0.05);font-weight:600}
+.message-bubble blockquote{
+  border-left:3px solid var(--primary);padding:8px 14px;margin:12px 0;
+  background:rgba(102,126,234,0.08);border-radius:0 var(--radius-xs) var(--radius-xs) 0;
+  font-size:14px;color:var(--text-secondary);
+}
+
+.message-time{font-size:11px;color:var(--text-muted);margin-top:6px;padding:0 4px}
+
+/* ============ Message Meta ============ */
+.message-meta{
+  display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;padding:0 2px;
+}
+.meta-badge{
+  font-size:11px;padding:4px 10px;border-radius:20px;display:flex;align-items:center;gap:5px;
+}
+.confidence-badge{background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.2)}
+.confidence-badge.medium{background:rgba(251,191,36,0.12);color:#fbbf24;border-color:rgba(251,191,36,0.2)}
+.confidence-badge.low{background:rgba(248,113,113,0.12);color:#f87171;border-color:rgba(248,113,113,0.2)}
+.latency-badge{background:rgba(102,126,234,0.12);color:var(--primary);border:1px solid rgba(102,126,234,0.2)}
+.citations-badge{background:rgba(167,139,250,0.12);color:var(--accent);border:1px solid rgba(167,139,250,0.2);cursor:pointer}
+.citations-badge:hover{background:rgba(167,139,250,0.2)}
+
+.btn-copy{
+  width:28px;height:28px;border-radius:6px;border:1px solid var(--glass-border);
+  background:transparent;color:var(--text-muted);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:all .2s;margin-left:auto;
+}
+.btn-copy:hover{background:var(--glass-bg-hover);color:var(--text-primary)}
+.btn-copy svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2}
+
+/* ============ Citations Panel ============ */
+.citations-panel{
+  margin-top:12px;border-radius:var(--radius-xs);overflow:hidden;
+  border:1px solid var(--glass-border);background:rgba(0,0,0,0.15);
+  max-height:0;opacity:0;transition:all .3s ease;
+}
+.citations-panel.open{max-height:500px;opacity:1}
+.citations-header{
+  padding:10px 14px;font-size:12px;font-weight:600;color:var(--text-secondary);
+  background:rgba(255,255,255,0.03);border-bottom:1px solid var(--glass-border);
+  display:flex;align-items:center;gap:6px;
+}
+.citation-item{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.05);font-size:12px}
+.citation-item:last-child{border-bottom:none}
+.citation-path{color:var(--accent);font-weight:500;margin-bottom:4px;word-break:break-all}
+.citation-score{color:var(--text-muted);font-size:11px}
+.citation-excerpt{color:var(--text-secondary);margin-top:4px;line-height:1.5;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+
+/* ============ Reasoning Trace ============ */
+.reasoning-panel{
+  margin-top:12px;border-radius:var(--radius-xs);overflow:hidden;
+  border:1px solid var(--glass-border);background:rgba(0,0,0,0.15);
+  max-height:0;opacity:0;transition:all .3s ease;
+}
+.reasoning-panel.open{max-height:600px;opacity:1;overflow-y:auto}
+.reasoning-header{
+  padding:10px 14px;font-size:12px;font-weight:600;color:var(--text-secondary);
+  background:rgba(255,255,255,0.03);border-bottom:1px solid var(--glass-border);
+  display:flex;align-items:center;gap:6px;cursor:pointer;
+}
+.reasoning-step{
+  padding:8px 14px;border-bottom:1px solid rgba(255,255,255,0.03);
+  font-size:12px;color:var(--text-secondary);line-height:1.5;display:flex;gap:8px;
+}
+.reasoning-step:last-child{border-bottom:none}
+.step-icon{color:var(--primary);flex-shrink:0;margin-top:1px}
+
+/* ============ Thinking Indicator ============ */
+.thinking{display:flex;gap:12px;margin-bottom:24px;animation:slideUp .3s ease}
+.thinking .message-avatar{
+  width:36px;height:36px;border-radius:12px;flex-shrink:0;
+  background:var(--glass-bg);border:1px solid var(--glass-border);
+  display:flex;align-items:center;justify-content:center;
+}
+.thinking-bubble{
+  padding:16px 22px;border-radius:var(--radius);border-top-left-radius:4px;
+  background:var(--glass-bg);backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur));
+  border:1px solid var(--glass-border);display:flex;align-items:center;gap:12px;
+}
+.thinking-dots{display:flex;gap:5px}
+.thinking-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--accent);
+  animation:pulse 1.4s ease-in-out infinite;
+}
+.thinking-dot:nth-child(2){animation-delay:0.2s}
+.thinking-dot:nth-child(3){animation-delay:0.4s}
+@keyframes pulse{0%,100%{opacity:0.3;transform:scale(0.8)}50%{opacity:1;transform:scale(1)}}
+.thinking-text{font-size:13px;color:var(--text-secondary)}
+
+/* ============ Input Area ============ */
+.input-area{padding:0 24px 24px}
+.input-container{
+  background:var(--glass-bg);backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur));
+  border:1px solid var(--glass-border);border-radius:var(--radius);
+  padding:4px;display:flex;align-items:flex-end;gap:4px;
+  transition:border-color .2s;
+}
+.input-container:focus-within{border-color:var(--primary);box-shadow:0 0 20px rgba(102,126,234,0.15)}
+.input-container textarea{
+  flex:1;background:transparent;border:none;outline:none;
+  color:var(--text-primary);font-size:14px;font-family:var(--font);
+  padding:12px 14px;resize:none;min-height:24px;max-height:200px;line-height:1.5;
+}
+.input-container textarea::placeholder{color:var(--text-muted)}
+.btn-send{
+  width:42px;height:42px;border-radius:12px;border:none;cursor:pointer;
+  background:linear-gradient(135deg,var(--primary),var(--secondary));
+  color:white;display:flex;align-items:center;justify-content:center;
+  transition:all .2s;flex-shrink:0;
+}
+.btn-send:hover{box-shadow:0 4px 15px rgba(102,126,234,0.4);transform:scale(1.05)}
+.btn-send:active{transform:scale(0.95)}
+.btn-send:disabled{opacity:0.4;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-send svg{width:20px;height:20px;fill:white}
+.input-hint{text-align:center;font-size:11px;color:var(--text-muted);margin-top:8px;padding:0 4px}
+
+/* ============ LLM Judge Panel ============ */
+.judge-panel{
+  margin-top:12px;border-radius:var(--radius-xs);overflow:hidden;
+  border:1px solid rgba(102,126,234,0.2);background:rgba(102,126,234,0.05);
+}
+.judge-header{
+  padding:10px 14px;font-size:12px;font-weight:600;color:var(--primary);
+  background:rgba(102,126,234,0.05);border-bottom:1px solid rgba(102,126,234,0.15);
+  display:flex;align-items:center;gap:6px;cursor:pointer;
+}
+.judge-content{padding:12px 14px;display:none}
+.judge-content.open{display:block}
+.judge-model{margin-bottom:12px}
+.judge-model-name{font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px}
+.judge-scores{display:flex;flex-direction:column;gap:6px}
+.judge-score-row{display:flex;align-items:center;gap:8px;font-size:12px}
+.judge-score-label{width:130px;color:var(--text-secondary);flex-shrink:0}
+.judge-score-bar{flex:1;height:6px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden}
+.judge-score-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--primary),var(--accent));transition:width .5s ease}
+.judge-score-value{width:30px;text-align:right;color:var(--text-primary);font-weight:600;flex-shrink:0}
+.judge-reasoning{font-size:11px;color:var(--text-secondary);margin-top:6px;line-height:1.5;padding:8px;background:rgba(0,0,0,0.1);border-radius:6px}
+
+/* ============ Animations ============ */
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+/* ============ Responsive ============ */
+@media(max-width:768px){
+  .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:100;transform:translateX(-100%);opacity:0}
+  .sidebar.open{transform:translateX(0);opacity:1}
+  .btn-toggle-sidebar{display:flex}
+  .message-content{max-width:88%}
+  .welcome-grid{grid-template-columns:1fr}
+  .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99}
+  .sidebar-overlay.open{display:block}
+}
+@media(max-width:480px){
+  .messages{padding:16px}
+  .input-area{padding:0 16px 16px}
+  .welcome h1{font-size:22px}
+}
+
+/* ============ Toast ============ */
+.toast{
+  position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);
+  background:rgba(0,0,0,0.7);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid var(--glass-border);border-radius:var(--radius-xs);
+  padding:10px 20px;font-size:13px;color:var(--text-primary);
+  opacity:0;transition:all .3s ease;pointer-events:none;z-index:200;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="bg-gradient">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+  <div class="orb orb-4"></div>
+  <div class="orb orb-5"></div>
+</div>
+
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+      </div>
+      <div class="logo-text">
+        <span class="logo-title">RadOnc AI</span>
+        <span class="logo-subtitle">Radiation Oncology Assistant</span>
+      </div>
+    </div>
+
+    <button class="btn-new-chat" onclick="app.newChat()">
+      <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New Chat
+    </button>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Suggested Questions</div>
+      <div class="suggestion-card" onclick="app.askSuggestion(this)">
+        <div class="label">Standard RT dose fractionation after breast-conserving surgery for early-stage breast cancer?</div>
+        <span class="tag">Breast</span>
+      </div>
+      <div class="suggestion-card" onclick="app.askSuggestion(this)">
+        <div class="label">Indications comparison between SRS and WBRT for brain metastases?</div>
+        <span class="tag">Brain Mets</span>
+      </div>
+      <div class="suggestion-card" onclick="app.askSuggestion(this)">
+        <div class="label">Standard SBRT fractionation schemes for early-stage NSCLC?</div>
+        <span class="tag">Thorax</span>
+      </div>
+      <div class="suggestion-card" onclick="app.askSuggestion(this)">
+        <div class="label">Timing and considerations for RT combined with immunotherapy?</div>
+        <span class="tag">Immunotherapy</span>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Disease Categories</div>
+      <div class="category-tags" id="categoryTags"></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="status-indicator">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">System Ready</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="chat-header">
+      <div class="chat-header-left">
+        <button class="btn-toggle-sidebar" id="btnToggleSidebar" onclick="app.toggleSidebar()">
+          <svg viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <span class="chat-header-title">RadOnc AI Assistant</span>
+        <span class="chat-header-badge">Agentic RAG</span>
+      </div>
+      <div class="chat-header-right">
+        <button class="header-btn" title="Clear Chat" onclick="app.newChat()">
+          <svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        </div>
+        <h1>Radiation Oncology AI Assistant</h1>
+        <p>An Agentic RAG-powered clinical guideline Q&amp;A system covering radiation treatment protocols for breast cancer, thoracic tumors, brain metastases, hematologic malignancies, and more.</p>
+        <div class="welcome-grid">
+          <div class="welcome-card" onclick="app.askQuestion('What is the standard RT dose fractionation after breast-conserving surgery for early-stage breast cancer?')">
+            <div class="icon">💊</div>
+            <div class="title">Dose &amp; Fractionation</div>
+            <div class="desc">Standard post-lumpectomy RT regimens for early-stage breast cancer</div>
+          </div>
+          <div class="welcome-card" onclick="app.askQuestion('What are the differences in indications between SRS and WBRT for brain metastases?')">
+            <div class="icon">🧠</div>
+            <div class="title">Treatment Comparison</div>
+            <div class="desc">SRS vs. WBRT selection criteria for brain metastases</div>
+          </div>
+          <div class="welcome-card" onclick="app.askQuestion('What are the recommended SBRT fractionation schemes for early-stage NSCLC?')">
+            <div class="icon">🫁</div>
+            <div class="title">SBRT Protocols</div>
+            <div class="desc">Stereotactic body RT regimens for early-stage NSCLC</div>
+          </div>
+          <div class="welcome-card" onclick="app.askQuestion('What are the key considerations when combining RT with immune checkpoint inhibitors?')">
+            <div class="icon">🔬</div>
+            <div class="title">Combination Therapy</div>
+            <div class="desc">Timing and strategies for RT-immunotherapy combinations</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-container">
+        <textarea id="queryInput" rows="1" placeholder="Ask a radiation oncology question..." onkeydown="app.handleKeyDown(event)" oninput="app.autoResize(this)"></textarea>
+        <button class="btn-send" id="btnSend" onclick="app.send()" title="Send">
+          <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </div>
+      <div class="input-hint">Press Enter to send, Shift + Enter for new line · AI responses based on clinical guidelines are for reference only</div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const CATEGORIES = [
+  {id:'breast',name:'Breast'},{id:'brain_mets',name:'Brain Mets'},
+  {id:'thorax',name:'Thorax'},{id:'hematologic',name:'Hematologic'},
+  {id:'cns',name:'CNS'},{id:'gi',name:'Gastrointestinal'},
+  {id:'gu',name:'Genitourinary'},{id:'gyn',name:'Gynecology'},
+  {id:'head_neck',name:'Head & Neck'},{id:'skin',name:'Skin'},
+  {id:'sarcoma',name:'Sarcoma'},{id:'pediatrics',name:'Pediatrics'},
+];
+
+class ChatApp {
+  constructor() {
+    this.messages = [];
+    this.isLoading = false;
+    this.apiKey = 'YOUR_API_KEY';
+    this.sidebarOpen = window.innerWidth > 768;
+    this.init();
+  }
+
+  init() {
+    this.renderCategories();
+    this.checkHealth();
+    document.getElementById('queryInput').focus();
+    document.getElementById('sidebarOverlay').addEventListener('click', () => this.toggleSidebar());
+  }
+
+  renderCategories() {
+    const container = document.getElementById('categoryTags');
+    container.innerHTML = CATEGORIES.map(c =>
+      `<span class="category-tag" onclick="app.askQuestion('Overview of radiation therapy guidelines for ${c.name}')">${c.name}</span>`
+    ).join('');
+  }
+
+  async checkHealth() {
+    try {
+      const resp = await fetch('/health');
+      if (resp.ok) {
+        document.getElementById('statusDot').classList.remove('offline');
+        document.getElementById('statusText').textContent = 'System Ready';
+      } else { this.setOffline(); }
+    } catch { this.setOffline(); }
+  }
+
+  setOffline() {
+    document.getElementById('statusDot').classList.add('offline');
+    document.getElementById('statusText').textContent = 'System Offline';
+  }
+
+  toggleSidebar() {
+    this.sidebarOpen = !this.sidebarOpen;
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    if (window.innerWidth <= 768) {
+      sidebar.classList.toggle('open', this.sidebarOpen);
+      overlay.classList.toggle('open', this.sidebarOpen);
+    } else {
+      sidebar.classList.toggle('collapsed', !this.sidebarOpen);
+    }
+  }
+
+  newChat() {
+    this.messages = [];
+    const container = document.getElementById('messages');
+    container.innerHTML = '';
+    this.renderWelcome(container);
+    document.getElementById('queryInput').focus();
+  }
+
+  renderWelcome(container) {
+    container.innerHTML = `
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">
+          <svg viewBox="0 0 24 24"><path fill="white" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        </div>
+        <h1>Radiation Oncology AI Assistant</h1>
+        <p>An Agentic RAG-powered clinical guideline Q&amp;A system covering radiation treatment protocols for breast cancer, thoracic tumors, brain metastases, hematologic malignancies, and more.</p>
+        <div class="welcome-grid">
+          <div class="welcome-card" onclick="app.askQuestion('What is the standard RT dose fractionation after breast-conserving surgery for early-stage breast cancer?')">
+            <div class="icon">💊</div><div class="title">Dose & Fractionation</div><div class="desc">Standard post-lumpectomy RT regimens for early-stage breast cancer</div>
+          </div>
+          <div class="welcome-card" onclick="app.askQuestion('What are the differences in indications between SRS and WBRT for brain metastases?')">
+            <div class="icon">🧠</div><div class="title">Treatment Comparison</div><div class="desc">SRS vs. WBRT selection criteria for brain metastases</div>
+          </div>
+          <div class="welcome-card" onclick="app.askQuestion('What are the recommended SBRT fractionation schemes for early-stage NSCLC?')">
+            <div class="icon">🫁</div><div class="title">SBRT Protocols</div><div class="desc">Stereotactic body RT regimens for early-stage NSCLC</div>
+          </div>
+          <div class="welcome-card" onclick="app.askQuestion('What are the key considerations when combining RT with immune checkpoint inhibitors?')">
+            <div class="icon">🔬</div><div class="title">Combination Therapy</div><div class="desc">Timing and strategies for RT-immunotherapy combinations</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  askSuggestion(el) {
+    const text = el.querySelector('.label').textContent;
+    this.askQuestion(text);
+    if (window.innerWidth <= 768 && this.sidebarOpen) this.toggleSidebar();
+  }
+
+  askQuestion(text) {
+    document.getElementById('queryInput').value = text;
+    this.send();
+  }
+
+  handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      this.send();
+    }
+  }
+
+  autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  }
+
+  async send() {
+    const input = document.getElementById('queryInput');
+    const query = input.value.trim();
+    if (!query || this.isLoading) return;
+
+    input.value = '';
+    input.style.height = 'auto';
+    this.isLoading = true;
+    document.getElementById('btnSend').disabled = true;
+
+    const welcome = document.getElementById('welcome');
+    if (welcome) welcome.remove();
+
+    this.addUserMessage(query);
+    this.showThinking();
+
+    try {
+      const data = await this.callAPI(query);
+      this.removeThinking();
+      this.addAssistantMessage(data);
+    } catch (err) {
+      this.removeThinking();
+      this.addErrorMessage(err.message || 'Request failed. Please check if the backend service is running.');
+    } finally {
+      this.isLoading = false;
+      document.getElementById('btnSend').disabled = false;
+      input.focus();
+    }
+  }
+
+  async callAPI(query) {
+    const resp = await fetch('/query', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-API-Key': this.apiKey},
+      body: JSON.stringify({query, include_reasoning: true, include_citations: true})
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    return resp.json();
+  }
+
+  addUserMessage(text) {
+    const ts = this.formatTime();
+    this.messages.push({role: 'user', content: text, time: ts});
+    const container = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'message user';
+    div.innerHTML = `
+      <div class="message-avatar"><svg viewBox="0 0 24 24"><path fill="white" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div>
+      <div class="message-content">
+        <div class="message-bubble"><p>${this.escapeHtml(text)}</p></div>
+        <div class="message-time">${ts}</div>
+      </div>`;
+    container.appendChild(div);
+    this.scrollToBottom();
+  }
+
+  showThinking() {
+    const container = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'thinking';
+    div.id = 'thinkingIndicator';
+    div.innerHTML = `
+      <div class="message-avatar"><svg viewBox="0 0 24 24"><path fill="white" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg></div>
+      <div class="thinking-bubble">
+        <div class="thinking-dots"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>
+        <span class="thinking-text">Analyzing query and retrieving relevant guidelines...</span>
+      </div>`;
+    container.appendChild(div);
+    this.scrollToBottom();
+  }
+
+  removeThinking() {
+    const el = document.getElementById('thinkingIndicator');
+    if (el) el.remove();
+  }
+
+  addAssistantMessage(data) {
+    const ts = this.formatTime();
+    const msgId = 'msg-' + Date.now();
+    this.messages.push({role: 'assistant', data, time: ts});
+
+    const confidence = data.confidence_score ?? 0;
+    const confClass = confidence >= 0.7 ? '' : confidence >= 0.4 ? ' medium' : ' low';
+    const confLabel = confidence >= 0.7 ? 'High' : confidence >= 0.4 ? 'Med' : 'Low';
+
+    const container = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+
+    let citationsHTML = '';
+    if (data.citations && data.citations.length > 0) {
+      citationsHTML = `
+        <div class="citations-panel" id="cit-${msgId}">
+          <div class="citations-header">References (${data.citations.length})</div>
+          ${data.citations.map(c => `
+            <div class="citation-item">
+              <div class="citation-path">[${c.citation_id}] ${this.escapeHtml(c.source_path)}</div>
+              <div class="citation-score">Relevance: ${(c.relevance_score * 100).toFixed(0)}%</div>
+              ${c.excerpt ? `<div class="citation-excerpt">${this.escapeHtml(c.excerpt)}</div>` : ''}
+            </div>`).join('')}
+        </div>`;
+    }
+
+    let reasoningHTML = '';
+    if (data.reasoning_trace && data.reasoning_trace.length > 0) {
+      reasoningHTML = `
+        <div class="reasoning-panel" id="reason-${msgId}">
+          <div class="reasoning-header" onclick="app.togglePanel('reason-${msgId}')">Reasoning Trace (${data.reasoning_trace.length} steps)</div>
+          ${data.reasoning_trace.map(s => `
+            <div class="reasoning-step"><span class="step-icon">→</span><span>${this.escapeHtml(s)}</span></div>`).join('')}
+        </div>`;
+    }
+
+    let judgeHTML = '';
+    if (data.metadata?.judge_evaluations?.length > 0) {
+      judgeHTML = this.renderJudgePanel(data.metadata.judge_evaluations, msgId);
+    }
+
+    div.innerHTML = `
+      <div class="message-avatar"><svg viewBox="0 0 24 24"><path fill="white" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg></div>
+      <div class="message-content">
+        <div class="message-bubble" id="bubble-${msgId}"></div>
+        <div class="message-meta">
+          <span class="meta-badge confidence-badge${confClass}">Confidence ${(confidence * 100).toFixed(0)}% (${confLabel})</span>
+          <span class="meta-badge latency-badge">${data.latency_ms?.toFixed(0) ?? '—'}ms</span>
+          ${data.citations?.length ? `<span class="meta-badge citations-badge" onclick="app.togglePanel('cit-${msgId}')">${data.citations.length} citation${data.citations.length > 1 ? 's' : ''}</span>` : ''}
+          ${data.reasoning_trace?.length ? `<span class="meta-badge citations-badge" onclick="app.togglePanel('reason-${msgId}')">Reasoning</span>` : ''}
+          <button class="btn-copy" onclick="app.copyAnswer('${msgId}')" title="Copy">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+        ${citationsHTML}${reasoningHTML}${judgeHTML}
+        <div class="message-time">${ts}</div>
+      </div>`;
+    container.appendChild(div);
+
+    this.typeWriter(document.getElementById(`bubble-${msgId}`), data.answer);
+    this.scrollToBottom();
+  }
+
+  renderJudgePanel(evaluations, msgId) {
+    let content = evaluations.map(ev => {
+      const dims = [
+        {label: 'Accuracy', score: ev.accuracy, reasoning: ev.accuracy_reasoning},
+        {label: 'Completeness', score: ev.completeness, reasoning: ev.completeness_reasoning},
+        {label: 'Retrieval Adherence', score: ev.retrieval_adherence, reasoning: ev.retrieval_adherence_reasoning},
+      ];
+      return `
+        <div class="judge-model">
+          <div class="judge-model-name">${this.escapeHtml(ev.model_name)} — Overall: ${ev.overall_score?.toFixed(2)}/5.00</div>
+          <div class="judge-scores">
+            ${dims.map(d => `
+              <div class="judge-score-row">
+                <span class="judge-score-label">${d.label}</span>
+                <div class="judge-score-bar"><div class="judge-score-fill" style="width:${(d.score/5)*100}%"></div></div>
+                <span class="judge-score-value">${d.score}/5</span>
+              </div>`).join('')}
+          </div>
+          ${ev.overall_reasoning ? `<div class="judge-reasoning">${this.escapeHtml(ev.overall_reasoning)}</div>` : ''}
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="judge-panel">
+        <div class="judge-header" onclick="app.toggleJudge('judge-${msgId}')">LLM Judge Evaluation</div>
+        <div class="judge-content" id="judge-${msgId}">${content}</div>
+      </div>`;
+  }
+
+  toggleJudge(id) {
+    document.getElementById(id)?.classList.toggle('open');
+  }
+
+  addErrorMessage(errorText) {
+    const container = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+    div.innerHTML = `
+      <div class="message-avatar" style="border-color:rgba(248,113,113,0.3)"><svg viewBox="0 0 24 24"><path fill="#f87171" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg></div>
+      <div class="message-content">
+        <div class="message-bubble" style="border-color:rgba(248,113,113,0.2)">
+          <p style="color:#f87171">${this.escapeHtml(errorText)}</p>
+          <p style="font-size:12px;color:var(--text-secondary)">Please ensure the backend service is running: <code>python api.py</code></p>
+        </div>
+      </div>`;
+    container.appendChild(div);
+    this.scrollToBottom();
+  }
+
+  typeWriter(element, text) {
+    const html = marked.parse(text);
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+    const fullText = tempDiv.innerHTML;
+
+    let i = 0;
+    element.innerHTML = '';
+    const speed = 8;
+    let inTag = false;
+
+    const write = () => {
+      if (i < fullText.length) {
+        const char = fullText[i];
+        if (char === '<') inTag = true;
+        if (inTag) {
+          let tagEnd = fullText.indexOf('>', i);
+          if (tagEnd !== -1) {
+            element.innerHTML += fullText.substring(i, tagEnd + 1);
+            i = tagEnd + 1;
+            inTag = false;
+          } else { i++; }
+        } else {
+          element.innerHTML += char;
+          i++;
+        }
+        this.scrollToBottom();
+        requestAnimationFrame(() => setTimeout(write, speed));
+      }
+    };
+    write();
+  }
+
+  togglePanel(id) {
+    document.getElementById(id)?.classList.toggle('open');
+  }
+
+  copyAnswer(msgId) {
+    const bubble = document.getElementById(`bubble-${msgId}`);
+    if (bubble) {
+      navigator.clipboard.writeText(bubble.textContent).then(() => this.showToast('Copied to clipboard'));
+    }
+  }
+
+  showToast(text) {
+    const toast = document.getElementById('toast');
+    toast.textContent = text;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2000);
+  }
+
+  scrollToBottom() {
+    const container = document.getElementById('messages');
+    requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
+  }
+
+  formatTime() {
+    return new Date().toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
+  }
+
+  escapeHtml(str) {
+    if (!str) return '';
+    const map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'};
+    return str.replace(/[&<>"']/g, c => map[c]);
+  }
+}
+
+marked.setOptions({ breaks: true, gfm: true });
+const app = new ChatApp();
+</script>
+</body>
+</html>

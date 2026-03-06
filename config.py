@@ -37,9 +37,11 @@ class EmbeddingConfig:
 @dataclass
 class RetrieverConfig:
     """Retrieval configuration."""
-    top_k: int = 15  # Number of chunks to retrieve (increased)
+    top_k: int = 15  # Number of chunks to retrieve initially for simple queries
     similarity_threshold: float = 0.3  # Minimum similarity score (lowered for better recall)
-    rerank_top_k: int = 5  # Final number after reranking
+    rerank_top_k: int = 7  # Final number after reranking for simple queries
+    complex_top_k: int = 10  # Number to retrieve per subtask
+    complex_rerank_top_k: int = 5  # Final number per topic after reranking
     use_hybrid_search: bool = True  # Combine dense + sparse retrieval
 
 
@@ -53,8 +55,8 @@ class AgentConfig:
     
     # Radiation oncology specific settings
     disease_categories: List[str] = field(default_factory=lambda: [
-        "Breast", "Thorax", "Hematologic", "CNS", "GI", "GU", "Gynecologic",
-        "Head_Neck", "Pediatric", "Sarcoma", "Skin"
+        "BrainMets", "Oligo", "Immuno", "Breast", "CNS", "Pediatrics", "Gastrointestinal", 
+        "Genitourinary", "Gynecology", "Head & Neck", "Skin", "Hematologic", "Sarcoma", "Thorax"
     ])
     
     # Treatment modalities for query classification

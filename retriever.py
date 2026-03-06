@@ -9,6 +9,7 @@ import numpy as np
 import re
 from typing import List, Dict, Optional, Tuple
 from collections import Counter
+from sentence_transformers import CrossEncoder
 
 from models import RetrievedChunk, SubTask, RetrievalStrategy, TaskStatus
 from config import RetrieverConfig, EmbeddingConfig, AWSConfig
@@ -16,16 +17,18 @@ from config import RetrieverConfig, EmbeddingConfig, AWSConfig
 
 class CrossEncoderReranker:
     """Cross-Encoder model for reranking retrieved documents."""
-    
-    def __init__(self, model_name: str = "BAAI/bge-reranker-base"):
+    def __init__(self, model_name: str = "BAAI/bge-reranker-base", preload: bool = False):
         self.model_name = model_name
         self._model = None
+
+        # Preload model if requested
+        if preload:
+            self._load_model()
     
     def _load_model(self):
         """Lazy load the cross-encoder model."""
         if self._model is None:
             try:
-                from sentence_transformers import CrossEncoder
                 print(f"Loading Cross-Encoder model: {self.model_name}")
                 self._model = CrossEncoder(self.model_name)
                 print("Cross-Encoder loaded successfully")
@@ -89,7 +92,7 @@ class RetrieverManager:
         self._faiss_index_loaded = False
         
         # Cross-Encoder for reranking
-        self._cross_encoder = CrossEncoderReranker()
+        self._cross_encoder = CrossEncoderReranker(preload=True)
     
     def _load_faiss_index(self) -> faiss.Index:
         """Load FAISS index from S3."""
@@ -360,7 +363,7 @@ class RetrieverManager:
                 chunks = self.hybrid_search(task.query, top_k=top_k)
             elif task.retrieval_strategy == RetrievalStrategy.MULTI_HOP:
                 # Multi-hop: first dense, then refine
-                initial_chunks = self.dense_search(task.query, top_k=5)
+                initial_chunks = self.dense_search(task.query, top_k)
                 if initial_chunks:
                     # Use top result to refine search
                     refined_query = f"{task.query} {initial_chunks[0].path}"

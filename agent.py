@@ -17,6 +17,8 @@ from task_planner import TaskPlanner
 from retriever import RetrieverManager, MockRetrieverManager
 from synthesizer import ResponseSynthesizer, SelfCritic
 from guardrails import GuardrailManager
+from models import RetrievedChunk
+from llm_judge import create_llm_judge, LLMJudge
 
 
 class AgenticRAGEngine:
@@ -51,8 +53,8 @@ class AgenticRAGEngine:
         )
         
         # Initialize components
-        self.query_analyzer = QueryAnalyzer(self.llm, self.config.agent)
-        self.task_planner = TaskPlanner(self.llm, self.config.agent)
+        self.query_analyzer = QueryAnalyzer(self.llm, self.config)
+        self.task_planner = TaskPlanner(self.llm, self.config)
         
         if use_mock:
             self.retriever = MockRetrieverManager()
@@ -63,9 +65,15 @@ class AgenticRAGEngine:
                 self.config.aws
             )
         
-        self.synthesizer = ResponseSynthesizer(self.llm, self.config.agent)
+        self.synthesizer = ResponseSynthesizer(self.llm, self.config)
         self.self_critic = SelfCritic(self.llm, self.config.agent)
         self.guardrails = GuardrailManager(self.config.guardrail)
+        
+        # Initialize LLM Judge (only if not using mock)
+        if not use_mock:
+            self.judge = create_llm_judge(self.config.aws)
+        else:
+            self.judge = None
         
         # State
         self.conversation_history = []
@@ -96,7 +104,121 @@ class AgenticRAGEngine:
             reverse=True
         )
         
-        return all_chunks[:self.config.retriever.rerank_top_k * 2]
+        # Convert to RetrievedChunk objects for reranking
+        chunk_objects = []
+        for chunk in all_chunks:
+            chunk_objects.append(RetrievedChunk(
+                faiss_id=chunk.get("faiss_id", -1),
+                chunk_id=chunk.get("chunk_id", 0),
+                text=chunk.get("text", ""),
+                path=chunk.get("path", ""),
+                category=chunk.get("category", ""),
+                headings={},
+                similarity_score=chunk.get("similarity_score", 0) or chunk.get("relevance_score", 0)
+            ))
+        
+        # Get the original query for reranking
+        query = plan.original_query
+        
+        # Rerank using cross-encoder
+        reranked_chunks = self.retriever.rerank(
+            query, 
+            chunk_objects, 
+            top_k=self.config.retriever.rerank_top_k
+        )
+        
+        # Convert back to dict format
+        final_chunks = []
+        for chunk in reranked_chunks:
+            final_chunks.append({
+                "faiss_id": chunk.faiss_id,
+                "chunk_id": chunk.chunk_id,
+                "text": chunk.text,
+                "path": chunk.path,
+                "category": chunk.category,
+                "similarity_score": chunk.similarity_score,
+                "relevance_score": chunk.relevance_score
+            })
+        
+        return final_chunks  
+
+    # !!!! NEW METHOD FOR COMPARISON/COMPLEX QUERIES !!!!
+    def _collect_multi_topic_chunks(self, plan: TaskPlan) -> Dict[str, List[Dict]]:  
+        """
+        Collect chunks for comparison/complex queries with balanced per-topic reranking.
+        
+        Returns chunks grouped by topic with each topic getting equal representation.
+        Each topic gets top 5 chunks after cross-encoder reranking (total 10).
+        """
+        from models import RetrievedChunk
+        
+        # Group chunks by task (topic)
+        chunks_by_topic = {}
+        
+        for task in plan.sub_tasks:
+            if task.status == TaskStatus.COMPLETED:
+                topic = task.description.replace("Retrieve information about ", "")
+                chunks_by_topic[topic] = task.retrieved_chunks
+        
+        # Deduplicate across all topics first
+        all_seen_ids = set()
+        deduped_by_topic = {}
+        
+        for topic, chunks in chunks_by_topic.items():
+            deduped_chunks = []
+            for chunk in chunks:
+                chunk_id = chunk.get("faiss_id")
+                if chunk_id not in all_seen_ids:
+                    deduped_chunks.append(chunk)
+                    all_seen_ids.add(chunk_id)
+            deduped_by_topic[topic] = deduped_chunks
+        
+        # Apply cross-encoder reranking per topic
+        reranked_by_topic = {}
+        
+        for topic, chunks in deduped_by_topic.items():
+            if not chunks:
+                reranked_by_topic[topic] = []
+                continue
+            
+            # Convert to RetrievedChunk objects
+            chunk_objects = []
+            for chunk in chunks:
+                chunk_objects.append(RetrievedChunk(
+                    faiss_id=chunk.get("faiss_id", -1),
+                    chunk_id=chunk.get("chunk_id", 0),
+                    text=chunk.get("text", ""),
+                    path=chunk.get("path", ""),
+                    category=chunk.get("category", ""),
+                    headings={},
+                    similarity_score=chunk.get("similarity_score", 0) or chunk.get("relevance_score", 0)
+                ))
+            
+            # Rerank this topic's chunks with the topic as query context
+            reranked = self.retriever.rerank(
+                f"{plan.original_query} {topic}",  # Query + topic for relevance
+                chunk_objects,
+                top_k=self.config.retriever.complex_rerank_top_k
+            )
+            
+            # Convert back to dict format
+            final_chunks = []
+            for chunk in reranked:
+                final_chunks.append({
+                    "faiss_id": chunk.faiss_id,
+                    "chunk_id": chunk.chunk_id,
+                    "text": chunk.text,
+                    "path": chunk.path,
+                    "category": chunk.category,
+                    "similarity_score": chunk.similarity_score,
+                    "relevance_score": chunk.relevance_score
+                })
+            
+            reranked_by_topic[topic] = final_chunks
+        
+        return reranked_by_topic 
+
+
     
     def query(self, user_query: str) -> AgentResponse:
         """
@@ -164,29 +286,33 @@ class AgenticRAGEngine:
             self.retriever.execute_task(task)
             self._log_reasoning("RETRIEVE", f"Result: {task.result}")
         
-        # Collect all retrieved chunks
-        all_chunks = self._collect_all_chunks(plan)
-        self._log_reasoning("RETRIEVE", f"Collected {len(all_chunks)} unique chunks")
+        # Collect chunks differently based on query type
+        if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
+            chunks_by_topic = self._collect_multi_topic_chunks(plan)
+            total_chunks = sum(len(chunks) for chunks in chunks_by_topic.values())
+            self._log_reasoning("RETRIEVE", 
+                f"Collected {total_chunks} chunks across {len(chunks_by_topic)} topics "
+                f"(balanced with cross-encoder reranking)" 
+            )
+        else:
+            # Use standard collection with cross-encoder reranking
+            all_chunks = self._collect_all_chunks(plan)
+            self._log_reasoning("RETRIEVE", 
+                f"Collected {len(all_chunks)} chunks (cross-encoder reranked)" 
+            )
         
         # ========== Step 5: Response Synthesis ==========
         self._log_reasoning("SYNTHESIZE", "Generating response from retrieved information")
         
-        if analysis.intent == QueryIntent.COMPARISON:
-            # Group chunks by task for comparison
-            chunks_by_topic = {}
-            for task in plan.sub_tasks:
-                if task.status == TaskStatus.COMPLETED:
-                    topic = task.description.replace("Retrieve information about ", "")
-                    chunks_by_topic[topic] = task.retrieved_chunks
-            
-            answer, citations, confidence = self.synthesizer.synthesize_comparison(
-                processed_query, analysis, chunks_by_topic
+        if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
+            answer, citations, confidence = self.synthesizer.synthesize_multi_topic(
+                processed_query, analysis, chunks_by_topic 
             )
         else:
             answer, citations, confidence = self.synthesizer.synthesize(
                 processed_query, analysis, plan, all_chunks
             )
-        
+        ### Changed
         self._log_reasoning("SYNTHESIZE", 
             f"Generated answer with {len(citations)} citations, confidence: {confidence:.2f}"
         )
@@ -244,6 +370,14 @@ class AgenticRAGEngine:
         latency_ms = (time.time() - start_time) * 1000
         self._log_reasoning("COMPLETE", f"Total latency: {latency_ms:.0f}ms")
         
+
+        #
+        if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
+            total_chunks = sum(len(v) for v in chunks_by_topic.values())
+        else:
+            total_chunks = len(all_chunks)
+        #
+
         response = AgentResponse(
             query=user_query,
             answer=final_answer,
@@ -260,7 +394,7 @@ class AgenticRAGEngine:
                     "is_complex": analysis.is_complex
                 },
                 "retrieval": {
-                    "total_chunks": len(all_chunks),
+                    "total_chunks": total_chunks, # changed 
                     "tasks_completed": sum(
                         1 for t in plan.sub_tasks if t.status == TaskStatus.COMPLETED
                     ),
@@ -269,6 +403,56 @@ class AgenticRAGEngine:
             },
             latency_ms=latency_ms
         )
+        
+        # ========== Step 8: LLM Judge Evaluation ==========
+        if self.judge is not None:
+            self._log_reasoning("JUDGE", "Evaluating answer quality with LLM judges")
+            
+            # Extract retrieved context texts for evaluation
+            if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
+                # Collect all contexts from multi-topic chunks
+                retrieved_texts = []
+                for topic_chunks in chunks_by_topic.values():
+                    for chunk in topic_chunks[:3]:  # Top 3 per topic
+                        retrieved_texts.append(chunk.get("text", ""))
+            else:
+                # Collect contexts from all_chunks
+                retrieved_texts = [
+                    chunk.get("text", "") 
+                    for chunk in all_chunks[:5]  # Top 5 chunks
+                ]
+            
+            try:
+                judge_evaluations = self.judge.evaluate(
+                    query=user_query,
+                    answer=final_answer,
+                    retrieved_contexts=retrieved_texts
+                )
+                
+                # Store evaluations in response metadata
+                response.metadata["judge_evaluations"] = [
+                    {
+                        "model_name": eval.model_name,
+                        "accuracy": eval.accuracy.score,
+                        "accuracy_reasoning": eval.accuracy.reasoning,
+                        "completeness": eval.completeness.score,
+                        "completeness_reasoning": eval.completeness.reasoning,
+                        "retrieval_adherence": eval.retrieval_adherence.score,
+                        "retrieval_adherence_reasoning": eval.retrieval_adherence.reasoning,
+                        "overall_score": eval.overall_score,
+                        "overall_reasoning": eval.overall_reasoning,
+                        "evaluation_time_ms": eval.evaluation_time_ms
+                    }
+                    for eval in judge_evaluations
+                ]
+                
+                self._log_reasoning("JUDGE", 
+                    f"Evaluation complete - Average overall score: "
+                    f"{sum(e.overall_score for e in judge_evaluations) / len(judge_evaluations):.2f}/5.00"
+                )
+            except Exception as e:
+                self._log_reasoning("JUDGE", f"Evaluation failed: {str(e)}")
+                response.metadata["judge_evaluations"] = []
         
         # Store in conversation history
         self.conversation_history.append({
