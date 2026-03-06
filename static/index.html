@@ -258,11 +258,11 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
 
 /* ============ Citations Panel ============ */
 .citations-panel{
-  margin-top:12px;border-radius:var(--radius-xs);overflow:hidden;
+  margin-top:12px;border-radius:var(--radius-xs);
   border:1px solid var(--glass-border);background:rgba(0,0,0,0.15);
-  max-height:0;opacity:0;transition:all .3s ease;
+  display:none;
 }
-.citations-panel.open{max-height:500px;opacity:1}
+.citations-panel.open{display:block}
 .citations-header{
   padding:10px 14px;font-size:12px;font-weight:600;color:var(--text-secondary);
   background:rgba(255,255,255,0.03);border-bottom:1px solid var(--glass-border);
@@ -278,11 +278,11 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
 
 /* ============ Reasoning Trace ============ */
 .reasoning-panel{
-  margin-top:12px;border-radius:var(--radius-xs);overflow:hidden;
+  margin-top:12px;border-radius:var(--radius-xs);
   border:1px solid var(--glass-border);background:rgba(0,0,0,0.15);
-  max-height:0;opacity:0;transition:all .3s ease;
+  display:none;
 }
-.reasoning-panel.open{max-height:600px;opacity:1;overflow-y:auto}
+.reasoning-panel.open{display:block}
 .reasoning-header{
   padding:10px 14px;font-size:12px;font-weight:600;color:var(--text-secondary);
   background:rgba(255,255,255,0.03);border-bottom:1px solid var(--glass-border);
@@ -346,16 +346,16 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
 
 /* ============ LLM Judge Panel ============ */
 .judge-panel{
-  margin-top:12px;border-radius:var(--radius-xs);overflow:hidden;
+  margin-top:12px;border-radius:var(--radius-xs);display:none;
   border:1px solid rgba(102,126,234,0.2);background:rgba(102,126,234,0.05);
 }
+.judge-panel.open{display:block}
 .judge-header{
   padding:10px 14px;font-size:12px;font-weight:600;color:var(--primary);
   background:rgba(102,126,234,0.05);border-bottom:1px solid rgba(102,126,234,0.15);
   display:flex;align-items:center;gap:6px;cursor:pointer;
 }
-.judge-content{padding:12px 14px;display:none}
-.judge-content.open{display:block}
+.judge-content{padding:12px 14px}
 .judge-model{margin-bottom:12px}
 .judge-model-name{font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px}
 .judge-scores{display:flex;flex-direction:column;gap:6px}
@@ -805,9 +805,9 @@ class ChatApp {
     }).join('');
 
     return `
-      <div class="judge-panel">
+      <div class="judge-panel" id="judge-${msgId}">
         <div class="judge-header" onclick="app.toggleJudge('judge-${msgId}')">LLM Judge Evaluation</div>
-        <div class="judge-content" id="judge-${msgId}">${content}</div>
+        <div class="judge-content">${content}</div>
       </div>`;
   }
 
