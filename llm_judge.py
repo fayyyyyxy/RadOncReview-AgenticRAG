@@ -51,16 +51,11 @@ class LLMJudge:
             region_name=aws_config.region
         )
         
-        # Judge models - Using Llama 3 70B and 8B (available in account)
+        # Judge model - Llama 3 70B
         self.judge_models = [
             {
                 "model_id": "meta.llama3-70b-instruct-v1:0",
                 "name": "Llama 3 70B Instruct",
-                "type": "llama"
-            },
-            {
-                "model_id": "meta.llama3-8b-instruct-v1:0",
-                "name": "Llama 3 8B Instruct",
                 "type": "llama"
             }
         ]
@@ -354,25 +349,6 @@ You are an expert evaluator. Respond with valid JSON only. Keep explanations bri
             print(f"  💭 Overall Assessment:")
             print(f"     {eval.overall_reasoning}")
             print()
-        
-        # Only calculate consensus if we have valid scores
-        valid_evals = [e for e in evaluations if e.overall_score > 0]
-        if valid_evals:
-            avg_accuracy = sum(e.accuracy.score for e in valid_evals) / len(valid_evals)
-            avg_completeness = sum(e.completeness.score for e in valid_evals) / len(valid_evals)
-            avg_retrieval = sum(e.retrieval_adherence.score for e in valid_evals) / len(valid_evals)
-            avg_overall = sum(e.overall_score for e in valid_evals) / len(valid_evals)
-            
-            print("-" * 80)
-            if len(valid_evals) < len(evaluations):
-                print(f"CONSENSUS SCORES ({len(valid_evals)}/{len(evaluations)} judges successful)")
-            else:
-                print("CONSENSUS SCORES (Average Across All Judges)")
-            print("-" * 80)
-            print(f"  Accuracy:            {avg_accuracy:.2f}/5.00")
-            print(f"  Completeness:        {avg_completeness:.2f}/5.00")
-            print(f"  Retrieval Adherence: {avg_retrieval:.2f}/5.00")
-            print(f"  Overall:             {avg_overall:.2f}/5.00")
         
         print("\n" + "=" * 80 + "\n")
 

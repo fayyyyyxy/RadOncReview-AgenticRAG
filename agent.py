@@ -69,11 +69,8 @@ class AgenticRAGEngine:
         self.self_critic = SelfCritic(self.llm, self.config.agent)
         self.guardrails = GuardrailManager(self.config.guardrail)
         
-        # Initialize LLM Judge (only if not using mock)
-        if not use_mock:
-            self.judge = create_llm_judge(self.config.aws)
-        else:
-            self.judge = None
+        # Initialize LLM Judge (requires AWS)
+        self.judge = create_llm_judge(self.config.aws)
         
         # State
         self.conversation_history = []
@@ -406,20 +403,18 @@ class AgenticRAGEngine:
         
         # ========== Step 8: LLM Judge Evaluation ==========
         if self.judge is not None:
-            self._log_reasoning("JUDGE", "Evaluating answer quality with LLM judges")
+            self._log_reasoning("JUDGE", "Evaluating answer quality with Llama 3 70B judge")
             
             # Extract retrieved context texts for evaluation
             if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-                # Collect all contexts from multi-topic chunks
                 retrieved_texts = []
                 for topic_chunks in chunks_by_topic.values():
-                    for chunk in topic_chunks[:3]:  # Top 3 per topic
+                    for chunk in topic_chunks[:3]:
                         retrieved_texts.append(chunk.get("text", ""))
             else:
-                # Collect contexts from all_chunks
                 retrieved_texts = [
-                    chunk.get("text", "") 
-                    for chunk in all_chunks[:5]  # Top 5 chunks
+                    chunk.get("text", "")
+                    for chunk in all_chunks[:5]
                 ]
             
             try:
@@ -428,29 +423,35 @@ class AgenticRAGEngine:
                     answer=final_answer,
                     retrieved_contexts=retrieved_texts
                 )
-                
-                # Store evaluations in response metadata
+
+                judge_evaluation = judge_evaluations[0]  # Llama 3 70B only
                 response.metadata["judge_evaluations"] = [
                     {
-                        "model_name": eval.model_name,
-                        "accuracy": eval.accuracy.score,
-                        "accuracy_reasoning": eval.accuracy.reasoning,
-                        "completeness": eval.completeness.score,
-                        "completeness_reasoning": eval.completeness.reasoning,
-                        "retrieval_adherence": eval.retrieval_adherence.score,
-                        "retrieval_adherence_reasoning": eval.retrieval_adherence.reasoning,
-                        "overall_score": eval.overall_score,
-                        "overall_reasoning": eval.overall_reasoning,
-                        "evaluation_time_ms": eval.evaluation_time_ms
+                        "model_name": judge_evaluation.model_name,
+                        "accuracy": judge_evaluation.accuracy.score,
+                        "accuracy_reasoning": judge_evaluation.accuracy.reasoning,
+                        "completeness": judge_evaluation.completeness.score,
+                        "completeness_reasoning": judge_evaluation.completeness.reasoning,
+                        "retrieval_adherence": judge_evaluation.retrieval_adherence.score,
+                        "retrieval_adherence_reasoning": judge_evaluation.retrieval_adherence.reasoning,
+                        "overall_score": judge_evaluation.overall_score,
+                        "overall_reasoning": judge_evaluation.overall_reasoning,
+                        "evaluation_time_ms": judge_evaluation.evaluation_time_ms
                     }
-                    for eval in judge_evaluations
                 ]
                 
-                self._log_reasoning("JUDGE", 
-                    f"Evaluation complete - Average overall score: "
-                    f"{sum(e.overall_score for e in judge_evaluations) / len(judge_evaluations):.2f}/5.00"
+                self._log_reasoning("JUDGE",
+                    f"Evaluation complete — Accuracy: {judge_evaluation.accuracy.score}/5, "
+                    f"Completeness: {judge_evaluation.completeness.score}/5, "
+                    f"Retrieval Adherence: {judge_evaluation.retrieval_adherence.score}/5 "
+                    f"(overall {judge_evaluation.overall_score:.2f}/5.00)"
                 )
             except Exception as e:
+                err_msg = str(e).lower()
+                is_token_err = "token has expired" in err_msg or "sso" in err_msg or "refresh failed" in err_msg
+                if is_token_err:
+                    # Re-raise so UI can catch it and show the correct message
+                    raise
                 self._log_reasoning("JUDGE", f"Evaluation failed: {str(e)}")
                 response.metadata["judge_evaluations"] = []
         
