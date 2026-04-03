@@ -76,6 +76,32 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
 
 .sidebar-section{margin-top:28px}
 .sidebar-section-title{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:12px;padding:0 4px}
+
+/* History List */
+.history-list{display:flex;flex-direction:column;gap:2px;max-height:260px;overflow-y:auto;padding-right:2px}
+.history-list::-webkit-scrollbar{width:4px}
+.history-list::-webkit-scrollbar-track{background:transparent}
+.history-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:2px}
+.history-item{
+  display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:var(--radius-xs);
+  cursor:pointer;transition:all .2s;border:1px solid transparent;position:relative;
+  min-height:40px;
+}
+.history-item:hover{background:var(--glass-bg-hover);border-color:var(--glass-border)}
+.history-item.active{background:rgba(102,126,234,0.15);border-color:rgba(102,126,234,0.3)}
+.history-item-icon{flex-shrink:0;width:18px;height:18px;color:var(--text-muted);opacity:0.6}
+.history-item.active .history-item-icon{color:var(--primary);opacity:1}
+.history-item-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.history-item-title{font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-item-time{font-size:10px;color:var(--text-muted)}
+.history-item-delete{
+  opacity:0;width:24px;height:24px;border-radius:6px;border:none;
+  background:transparent;color:var(--text-muted);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s;
+}
+.history-item:hover .history-item-delete{opacity:1}
+.history-item-delete:hover{background:rgba(248,113,113,0.15);color:#f87171}
+.history-empty{font-size:12px;color:var(--text-muted);text-align:center;padding:16px 8px;line-height:1.6}
 .suggestion-card{
   padding:12px 14px;border-radius:var(--radius-xs);cursor:pointer;
   background:transparent;border:1px solid transparent;
@@ -428,6 +454,13 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
     </button>
 
     <div class="sidebar-section">
+      <div class="sidebar-section-title">Chat History</div>
+      <div class="history-list" id="historyList">
+        <div class="history-empty">No conversations yet.<br>Start a new chat!</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
       <div class="sidebar-section-title">Suggested Questions</div>
       <div class="suggestion-card" onclick="app.askSuggestion(this)">
         <div class="label">Standard RT dose fractionation after breast-conserving surgery for early-stage breast cancer?</div>
@@ -539,14 +572,151 @@ class ChatApp {
     this.isLoading = false;
     this.apiKey = 'YOUR_API_KEY';
     this.sidebarOpen = window.innerWidth > 768;
+    this.conversations = {};
+    this.currentConvId = null;
+    this.STORAGE_KEY = 'radonc_conversations';
+    this.CURRENT_KEY = 'radonc_current_conv';
+    this.userScrolled = false;
     this.init();
   }
 
   init() {
+    this.loadConversations();
     this.renderCategories();
+    this.renderHistory();
     this.checkHealth();
+    if (this.currentConvId && this.conversations[this.currentConvId]) {
+      this.restoreConversation(this.currentConvId);
+    }
     document.getElementById('queryInput').focus();
     document.getElementById('sidebarOverlay').addEventListener('click', () => this.toggleSidebar());
+    document.getElementById('messages').addEventListener('wheel', () => { this.userScrolled = true; });
+    document.getElementById('messages').addEventListener('touchmove', () => { this.userScrolled = true; });
+  }
+
+  generateId() {
+    return 'conv-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
+  }
+
+  loadConversations() {
+    try {
+      const data = localStorage.getItem(this.STORAGE_KEY);
+      if (data) this.conversations = JSON.parse(data);
+      this.currentConvId = localStorage.getItem(this.CURRENT_KEY) || null;
+    } catch { this.conversations = {}; }
+  }
+
+  saveConversations() {
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.conversations));
+      if (this.currentConvId) localStorage.setItem(this.CURRENT_KEY, this.currentConvId);
+    } catch {}
+  }
+
+  saveCurrentConversation() {
+    if (!this.currentConvId || this.messages.length === 0) return;
+    const firstUserMsg = this.messages.find(m => m.role === 'user');
+    const title = firstUserMsg ? firstUserMsg.content.substring(0, 60) : 'New Chat';
+    this.conversations[this.currentConvId] = {
+      id: this.currentConvId,
+      title,
+      messages: this.messages,
+      updatedAt: Date.now(),
+      createdAt: this.conversations[this.currentConvId]?.createdAt || Date.now()
+    };
+    this.saveConversations();
+    this.renderHistory();
+  }
+
+  renderHistory() {
+    const container = document.getElementById('historyList');
+    const convList = Object.values(this.conversations)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    if (convList.length === 0) {
+      container.innerHTML = '<div class="history-empty">No conversations yet.<br>Start a new chat!</div>';
+      return;
+    }
+
+    container.innerHTML = convList.map(conv => {
+      const isActive = conv.id === this.currentConvId;
+      const date = new Date(conv.updatedAt);
+      const timeStr = this.formatHistoryDate(date);
+      return `
+        <div class="history-item${isActive ? ' active' : ''}" onclick="app.switchConversation('${conv.id}')" title="${this.escapeHtml(conv.title)}">
+          <svg class="history-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <div class="history-item-body">
+            <div class="history-item-title">${this.escapeHtml(conv.title)}</div>
+            <div class="history-item-time">${timeStr}</div>
+          </div>
+          <button class="history-item-delete" onclick="event.stopPropagation();app.deleteConversation('${conv.id}')" title="Delete">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+        </div>`;
+    }).join('');
+  }
+
+  formatHistoryDate(date) {
+    const now = new Date();
+    const diff = now - date;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  switchConversation(id) {
+    if (id === this.currentConvId) return;
+    this.saveCurrentConversation();
+    this.currentConvId = id;
+    localStorage.setItem(this.CURRENT_KEY, id);
+    this.restoreConversation(id);
+    this.renderHistory();
+    if (window.innerWidth <= 768 && this.sidebarOpen) this.toggleSidebar();
+  }
+
+  restoreConversation(id) {
+    const conv = this.conversations[id];
+    if (!conv) return;
+    this.messages = conv.messages.map(m => ({...m}));
+    const container = document.getElementById('messages');
+    container.innerHTML = '';
+
+    if (this.messages.length === 0) {
+      this.renderWelcome(container);
+      return;
+    }
+
+    for (const msg of this.messages) {
+      if (msg.role === 'user') {
+        this.renderUserBubble(container, msg.content, msg.time);
+      } else if (msg.role === 'assistant') {
+        this.renderAssistantBubble(container, msg.data, msg.time);
+      }
+    }
+    this.scrollToBottom();
+  }
+
+  deleteConversation(id) {
+    delete this.conversations[id];
+    if (this.currentConvId === id) {
+      this.currentConvId = null;
+      localStorage.removeItem(this.CURRENT_KEY);
+      this.messages = [];
+      const container = document.getElementById('messages');
+      container.innerHTML = '';
+      this.renderWelcome(container);
+    }
+    this.saveConversations();
+    this.renderHistory();
   }
 
   renderCategories() {
@@ -584,10 +754,14 @@ class ChatApp {
   }
 
   newChat() {
+    this.saveCurrentConversation();
+    this.currentConvId = this.generateId();
+    localStorage.setItem(this.CURRENT_KEY, this.currentConvId);
     this.messages = [];
     const container = document.getElementById('messages');
     container.innerHTML = '';
     this.renderWelcome(container);
+    this.renderHistory();
     document.getElementById('queryInput').focus();
   }
 
@@ -644,6 +818,7 @@ class ChatApp {
     const query = input.value.trim();
     if (!query || this.isLoading) return;
 
+    this.userScrolled = false;
     input.value = '';
     input.style.height = 'auto';
     this.isLoading = true;
@@ -683,9 +858,16 @@ class ChatApp {
   }
 
   addUserMessage(text) {
+    if (!this.currentConvId) this.currentConvId = this.generateId();
     const ts = this.formatTime();
     this.messages.push({role: 'user', content: text, time: ts});
     const container = document.getElementById('messages');
+    this.renderUserBubble(container, text, ts);
+    this.scrollToBottom();
+    this.saveCurrentConversation();
+  }
+
+  renderUserBubble(container, text, ts) {
     const div = document.createElement('div');
     div.className = 'message user';
     div.innerHTML = `
@@ -695,7 +877,6 @@ class ChatApp {
         <div class="message-time">${ts}</div>
       </div>`;
     container.appendChild(div);
-    this.scrollToBottom();
   }
 
   showThinking() {
@@ -720,14 +901,19 @@ class ChatApp {
 
   addAssistantMessage(data) {
     const ts = this.formatTime();
-    const msgId = 'msg-' + Date.now();
     this.messages.push({role: 'assistant', data, time: ts});
+    const container = document.getElementById('messages');
+    this.renderAssistantBubble(container, data, ts, true);
+    this.scrollToBottom();
+    this.saveCurrentConversation();
+  }
 
+  renderAssistantBubble(container, data, ts, animate = false) {
+    const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4);
     const confidence = data.confidence_score ?? 0;
     const confClass = confidence >= 0.7 ? '' : confidence >= 0.4 ? ' medium' : ' low';
     const confLabel = confidence >= 0.7 ? 'High' : confidence >= 0.4 ? 'Med' : 'Low';
 
-    const container = document.getElementById('messages');
     const div = document.createElement('div');
     div.className = 'message assistant';
 
@@ -778,8 +964,12 @@ class ChatApp {
       </div>`;
     container.appendChild(div);
 
-    this.typeWriter(document.getElementById(`bubble-${msgId}`), data.answer);
-    this.scrollToBottom();
+    const bubble = document.getElementById(`bubble-${msgId}`);
+    if (animate) {
+      this.typeWriter(bubble, data.answer);
+    } else {
+      bubble.innerHTML = marked.parse(data.answer);
+    }
   }
 
   renderJudgePanel(evaluations, msgId) {
@@ -812,6 +1002,7 @@ class ChatApp {
   }
 
   toggleJudge(id) {
+    this.userScrolled = true;
     document.getElementById(id)?.classList.toggle('open');
   }
 
@@ -865,6 +1056,7 @@ class ChatApp {
   }
 
   togglePanel(id) {
+    this.userScrolled = true;
     document.getElementById(id)?.classList.toggle('open');
   }
 
@@ -883,6 +1075,7 @@ class ChatApp {
   }
 
   scrollToBottom() {
+    if (this.userScrolled) return;
     const container = document.getElementById('messages');
     requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
   }
