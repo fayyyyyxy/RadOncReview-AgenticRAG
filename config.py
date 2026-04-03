@@ -14,13 +14,14 @@ class AWSConfig:
     dynamodb_table: str = "YOUR_DYNAMODB_TABLE"
     faiss_index_key: str = "radonc_faiss_index.bin"
 
+    knowledge_base_id: str = "YOUR_KB_ID"
+    knowledge_base_enabled: bool = True
+    knowledge_base_datasource_id: str = "YOUR_KB_DATASOURCE_ID" 
+
 
 @dataclass
 class LLMConfig:
     """LLM configuration for AWS Bedrock."""
-    # Available models (based on check_available_models.py results):
-    # - meta.llama3-70b-instruct-v1:0  ✅ Available (recommended, more powerful)
-    # - meta.llama3-8b-instruct-v1:0   ✅ Available (faster, cheaper)
     model_id: str = "meta.llama3-70b-instruct-v1:0"
     max_tokens: int = 2048  # Llama 3 max_gen_len
     temperature: float = 0.1  # Low temperature for factual responses

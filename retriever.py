@@ -86,6 +86,14 @@ class RetrieverManager:
         self.s3 = self.session.client("s3", region_name=aws_config.region)
         self.dynamodb = self.session.resource("dynamodb", region_name=aws_config.region)
         self.table = self.dynamodb.Table(aws_config.dynamodb_table)
+
+        # Bedrock Knowledge Base client
+        self.bedrock_agent = self.session.client(
+            "bedrock-agent-runtime",
+            region_name=aws_config.region
+        )
+        self.kb_id = aws_config.knowledge_base_id
+        self.kb_enabled = aws_config.knowledge_base_enabled
         
         # FAISS index (loaded lazily)
         self._faiss_index = None
@@ -94,6 +102,74 @@ class RetrieverManager:
         # Cross-Encoder for reranking
         self._cross_encoder = CrossEncoderReranker(preload=True)
     
+    
+    # Bedrock Knowledge Base retrieval
+    def retrieve_from_knowledge_base(
+        self,
+        query: str,
+        top_k: int = 10
+    ) -> List[RetrievedChunk]:
+        """Retrieve from Bedrock Knowledge Base (reading list PDFs/docs in S3)."""
+        if not self.kb_enabled:
+            return []
+        try:
+            retrieval_config = {
+                "vectorSearchConfiguration": {
+                    "numberOfResults": top_k,
+                    "overrideSearchType": "HYBRID"
+                }
+            }
+
+            # Filter to specific data source if configured — leave empty to search all
+            if self.aws_config.knowledge_base_datasource_id:
+                retrieval_config["vectorSearchConfiguration"]["filter"] = {
+                    "equals": {
+                        "key": "x-amz-bedrock-kb-data-source-id",
+                        "value": self.aws_config.knowledge_base_datasource_id 
+                    }
+                }
+
+            response = self.bedrock_agent.retrieve(
+                knowledgeBaseId=self.kb_id,
+                retrievalQuery={"text": query},
+                retrievalConfiguration=retrieval_config
+            )
+
+            results = []
+            for i, r in enumerate(response.get("retrievalResults", [])):
+                content = r.get("content", {}).get("text", "")
+                s3_uri = r.get("location", {}).get("s3Location", {}).get("uri", "")
+                score = r.get("score", 0.0)
+
+                # Derive title and category from S3 path
+                # e.g. s3://YOUR_S3_BUCKET/reading-lists/GI/Rectum/German Rectal Trial.pdf
+                path_parts = s3_uri.replace(
+                    "s3://YOUR_S3_BUCKET/reading-lists/", ""
+                ).split("/")
+                disease = path_parts[0] if path_parts else "Unknown"
+                doc_title = (
+                    path_parts[-1].replace(".pdf", "").replace(".docx", "")
+                    if path_parts else s3_uri
+                )
+
+                results.append(RetrievedChunk(
+                    faiss_id=-(i + 1),       # negative IDs — no collision with FAISS IDs
+                    chunk_id=i,
+                    text=content,
+                    path=f"{disease} > {doc_title}",
+                    category=disease,
+                    similarity_score=float(score),
+                    source_type="clinical_trial",
+                    document_title=doc_title,
+                    s3_location=s3_uri
+                ))
+            return results
+
+        except Exception as e:
+            print(f"Bedrock KB retrieval failed: {e}")
+            return []
+
+
     def _load_faiss_index(self) -> faiss.Index:
         """Load FAISS index from S3."""
         if self._faiss_index_loaded:
@@ -370,8 +446,15 @@ class RetrieverManager:
                     chunks = self.hybrid_search(refined_query, top_k=top_k)
                 else:
                     chunks = []
+            # Bedrock Knowledge Base
+            elif task.retrieval_strategy == RetrievalStrategy.KNOWLEDGE_BASE:
+                chunks = self.retrieve_from_knowledge_base(
+                    task.query,
+                    top_k=top_k or self.config.top_k
+                )
             else:
-                chunks = self.hybrid_search(task.query, top_k=top_k)
+                # Fallback
+                chunks = self.dense_search(task.query, top_k=top_k)
             
             # Store results in task
             task.retrieved_chunks = [
@@ -382,7 +465,10 @@ class RetrieverManager:
                     "path": c.path,
                     "category": c.category,
                     "similarity_score": c.similarity_score,
-                    "relevance_score": c.relevance_score
+                    "relevance_score": c.relevance_score,
+                    "source_type": c.source_type,
+                    "document_title": c.document_title,
+                    "s3_location": c.s3_location
                 }
                 for c in chunks
             ]
