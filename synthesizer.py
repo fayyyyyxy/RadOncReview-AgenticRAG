@@ -41,8 +41,14 @@ Guidelines for your responses:
         for i, chunk in enumerate(chunks):
             citation_id = i + 1
             text = chunk.get("text", "")
-            path = chunk.get("path", "Unknown source")
             score = chunk.get("similarity_score", 0) or chunk.get("relevance_score", 0)
+
+            source_type = chunk.get("source_type", "review_notes")
+            doc_title = chunk.get("document_title", "")
+            path = (
+                doc_title if source_type == "clinical_trial" and doc_title
+                else chunk.get("path", "Unknown source")
+            )
             
             # Add to context
             context_parts.append(f"[{citation_id}] Source: {path}\n{text}\n")

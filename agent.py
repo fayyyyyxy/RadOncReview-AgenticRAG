@@ -69,11 +69,8 @@ class AgenticRAGEngine:
         self.self_critic = SelfCritic(self.llm, self.config.agent)
         self.guardrails = GuardrailManager(self.config.guardrail)
         
-        # Initialize LLM Judge (only if not using mock)
-        if not use_mock:
-            self.judge = create_llm_judge(self.config.aws)
-        else:
-            self.judge = None
+        # Initialize LLM Judge (requires AWS)
+        self.judge = create_llm_judge(self.config.aws)
         
         # State
         self.conversation_history = []
@@ -114,7 +111,10 @@ class AgenticRAGEngine:
                 path=chunk.get("path", ""),
                 category=chunk.get("category", ""),
                 headings={},
-                similarity_score=chunk.get("similarity_score", 0) or chunk.get("relevance_score", 0)
+                similarity_score=chunk.get("similarity_score", 0) or chunk.get("relevance_score", 0),
+                source_type=chunk.get("source_type", "review_notes"),
+                document_title=chunk.get("document_title", ""),
+                s3_location=chunk.get("s3_location", "")
             ))
         
         # Get the original query for reranking
@@ -137,7 +137,10 @@ class AgenticRAGEngine:
                 "path": chunk.path,
                 "category": chunk.category,
                 "similarity_score": chunk.similarity_score,
-                "relevance_score": chunk.relevance_score
+                "relevance_score": chunk.relevance_score,
+                "source_type": chunk.source_type,
+                "document_title": chunk.document_title,
+                "s3_location": chunk.s3_location
             })
         
         return final_chunks  
@@ -146,42 +149,61 @@ class AgenticRAGEngine:
     def _collect_multi_topic_chunks(self, plan: TaskPlan) -> Dict[str, List[Dict]]:  
         """
         Collect chunks for comparison/complex queries with balanced per-topic reranking.
-        
-        Returns chunks grouped by topic with each topic getting equal representation.
-        Each topic gets top 5 chunks after cross-encoder reranking (total 10).
+
+        Groups FAISS and KB tasks that share the same subtopic query together,
+        so each logical subtopic gets chunks from BOTH sources merged before reranking.
+        Each topic → rerank all sources together → top complex_rerank_top_k=5 chunks.
+
+        Example for "Compare SBRT vs EBRT":
+          Tasks: [Guidelines]SBRT, [Trial papers]SBRT, [Guidelines]EBRT, [Trial papers]EBRT
+          Groups: {"SBRT prostate": 20 chunks, "EBRT prostate": 20 chunks}
+          Result: {"SBRT prostate": 5 chunks, "EBRT prostate": 5 chunks} → 10 to LLM
         """
         from models import RetrievedChunk
-        
-        # Group chunks by task (topic)
         chunks_by_topic = {}
-        
+
         for task in plan.sub_tasks:
             if task.status == TaskStatus.COMPLETED:
-                topic = task.description.replace("Retrieve information about ", "")
-                chunks_by_topic[topic] = task.retrieved_chunks
-        
-        # Deduplicate across all topics first
+                topic_key = task.query
+                if topic_key not in chunks_by_topic:
+                    chunks_by_topic[topic_key] = {
+                        "label": (task.description
+                                  .replace("[Guidelines] ", "")
+                                  .replace("[Trial papers] ", "")
+                                  .replace("Search RadOncReview guidelines: ", "")
+                                  .replace("Search clinical trial papers: ", "")),
+                        "chunks": []
+                    }
+                chunks_by_topic[topic_key]["chunks"].extend(task.retrieved_chunks)
+
+        # ── Deduplicate across all topics (by faiss_id) ──
         all_seen_ids = set()
         deduped_by_topic = {}
-        
-        for topic, chunks in chunks_by_topic.items():
-            deduped_chunks = []
-            for chunk in chunks:
+
+        for topic_key, data in chunks_by_topic.items():
+            deduped = []
+            for chunk in data["chunks"]:
                 chunk_id = chunk.get("faiss_id")
                 if chunk_id not in all_seen_ids:
-                    deduped_chunks.append(chunk)
+                    deduped.append(chunk)
                     all_seen_ids.add(chunk_id)
-            deduped_by_topic[topic] = deduped_chunks
-        
-        # Apply cross-encoder reranking per topic
+            deduped_by_topic[topic_key] = {
+                "label": data["label"],
+                "chunks": deduped
+            }
+
+        # ── Rerank per topic: FAISS + KB chunks together → top 5 ──
         reranked_by_topic = {}
-        
-        for topic, chunks in deduped_by_topic.items():
+
+        for topic_key, data in deduped_by_topic.items():
+            label = data["label"]
+            chunks = data["chunks"]
+
             if not chunks:
-                reranked_by_topic[topic] = []
+                reranked_by_topic[label] = []
                 continue
-            
-            # Convert to RetrievedChunk objects
+
+            # Convert to RetrievedChunk objects for cross-encoder
             chunk_objects = []
             for chunk in chunks:
                 chunk_objects.append(RetrievedChunk(
@@ -191,17 +213,20 @@ class AgenticRAGEngine:
                     path=chunk.get("path", ""),
                     category=chunk.get("category", ""),
                     headings={},
-                    similarity_score=chunk.get("similarity_score", 0) or chunk.get("relevance_score", 0)
+                    similarity_score=chunk.get("similarity_score", 0) or chunk.get("relevance_score", 0),
+                    source_type=chunk.get("source_type", "review_notes"),
+                    document_title=chunk.get("document_title", ""),
+                    s3_location=chunk.get("s3_location", "")
                 ))
-            
-            # Rerank this topic's chunks with the topic as query context
+
+            # Rerank all chunks for this topic (FAISS + KB combined) → top k
             reranked = self.retriever.rerank(
-                f"{plan.original_query} {topic}",  # Query + topic for relevance
+                f"{plan.original_query} {label}",
                 chunk_objects,
                 top_k=self.config.retriever.complex_rerank_top_k
             )
-            
-            # Convert back to dict format
+
+            # Convert back to dict format preserving all fields
             final_chunks = []
             for chunk in reranked:
                 final_chunks.append({
@@ -211,11 +236,14 @@ class AgenticRAGEngine:
                     "path": chunk.path,
                     "category": chunk.category,
                     "similarity_score": chunk.similarity_score,
-                    "relevance_score": chunk.relevance_score
+                    "relevance_score": chunk.relevance_score,
+                    "source_type": chunk.source_type,
+                    "document_title": chunk.document_title,
+                    "s3_location": chunk.s3_location
                 })
-            
-            reranked_by_topic[topic] = final_chunks
-        
+
+            reranked_by_topic[label] = final_chunks
+
         return reranked_by_topic 
 
 
@@ -347,11 +375,17 @@ class AgenticRAGEngine:
                     if task.status == TaskStatus.PENDING:
                         self.retriever.execute_task(task)
                 
-                # Re-synthesize
-                all_chunks = self._collect_all_chunks(improved_plan)
-                answer, citations, confidence = self.synthesizer.synthesize(
-                    processed_query, analysis, improved_plan, all_chunks
-                )
+                # Re-synthesize — use same path as first attempt based on query type
+                if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
+                    chunks_by_topic = self._collect_multi_topic_chunks(improved_plan)
+                    answer, citations, confidence = self.synthesizer.synthesize_multi_topic(
+                        processed_query, analysis, chunks_by_topic
+                    )
+                else:
+                    all_chunks = self._collect_all_chunks(improved_plan)
+                    answer, citations, confidence = self.synthesizer.synthesize(
+                        processed_query, analysis, improved_plan, all_chunks
+                    )
                 
                 # Update confidence with critique score
                 confidence = (confidence + critique.confidence_score) / 2
@@ -406,20 +440,18 @@ class AgenticRAGEngine:
         
         # ========== Step 8: LLM Judge Evaluation ==========
         if self.judge is not None:
-            self._log_reasoning("JUDGE", "Evaluating answer quality with LLM judges")
+            self._log_reasoning("JUDGE", "Evaluating answer quality with Llama 3 70B judge")
             
             # Extract retrieved context texts for evaluation
             if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-                # Collect all contexts from multi-topic chunks
                 retrieved_texts = []
                 for topic_chunks in chunks_by_topic.values():
-                    for chunk in topic_chunks[:3]:  # Top 3 per topic
+                    for chunk in topic_chunks[:3]:
                         retrieved_texts.append(chunk.get("text", ""))
             else:
-                # Collect contexts from all_chunks
                 retrieved_texts = [
-                    chunk.get("text", "") 
-                    for chunk in all_chunks[:5]  # Top 5 chunks
+                    chunk.get("text", "")
+                    for chunk in all_chunks[:5]
                 ]
             
             try:
@@ -428,29 +460,35 @@ class AgenticRAGEngine:
                     answer=final_answer,
                     retrieved_contexts=retrieved_texts
                 )
-                
-                # Store evaluations in response metadata
+
+                judge_evaluation = judge_evaluations[0]  # Llama 3 70B only
                 response.metadata["judge_evaluations"] = [
                     {
-                        "model_name": eval.model_name,
-                        "accuracy": eval.accuracy.score,
-                        "accuracy_reasoning": eval.accuracy.reasoning,
-                        "completeness": eval.completeness.score,
-                        "completeness_reasoning": eval.completeness.reasoning,
-                        "retrieval_adherence": eval.retrieval_adherence.score,
-                        "retrieval_adherence_reasoning": eval.retrieval_adherence.reasoning,
-                        "overall_score": eval.overall_score,
-                        "overall_reasoning": eval.overall_reasoning,
-                        "evaluation_time_ms": eval.evaluation_time_ms
+                        "model_name": judge_evaluation.model_name,
+                        "accuracy": judge_evaluation.accuracy.score,
+                        "accuracy_reasoning": judge_evaluation.accuracy.reasoning,
+                        "completeness": judge_evaluation.completeness.score,
+                        "completeness_reasoning": judge_evaluation.completeness.reasoning,
+                        "retrieval_adherence": judge_evaluation.retrieval_adherence.score,
+                        "retrieval_adherence_reasoning": judge_evaluation.retrieval_adherence.reasoning,
+                        "overall_score": judge_evaluation.overall_score,
+                        "overall_reasoning": judge_evaluation.overall_reasoning,
+                        "evaluation_time_ms": judge_evaluation.evaluation_time_ms
                     }
-                    for eval in judge_evaluations
                 ]
                 
-                self._log_reasoning("JUDGE", 
-                    f"Evaluation complete - Average overall score: "
-                    f"{sum(e.overall_score for e in judge_evaluations) / len(judge_evaluations):.2f}/5.00"
+                self._log_reasoning("JUDGE",
+                    f"Evaluation complete — Accuracy: {judge_evaluation.accuracy.score}/5, "
+                    f"Completeness: {judge_evaluation.completeness.score}/5, "
+                    f"Retrieval Adherence: {judge_evaluation.retrieval_adherence.score}/5 "
+                    f"(overall {judge_evaluation.overall_score:.2f}/5.00)"
                 )
             except Exception as e:
+                err_msg = str(e).lower()
+                is_token_err = "token has expired" in err_msg or "sso" in err_msg or "refresh failed" in err_msg
+                if is_token_err:
+                    # Re-raise so UI can catch it and show the correct message
+                    raise
                 self._log_reasoning("JUDGE", f"Evaluation failed: {str(e)}")
                 response.metadata["judge_evaluations"] = []
         

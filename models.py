@@ -26,6 +26,7 @@ class RetrievalStrategy(Enum):
     SPARSE = "sparse"  # BM25/keyword search
     HYBRID = "hybrid"  # Combined dense + sparse
     MULTI_HOP = "multi_hop"  # Multi-step retrieval for complex queries
+    KNOWLEDGE_BASE = "knowledge_base" # Bedrock KB (reading list papers)
 
 
 class TaskStatus(Enum):
@@ -47,6 +48,7 @@ class QueryAnalysis:
     temporal_context: Optional[str] = None  # e.g., "postoperative", "adjuvant"
     is_complex: bool = False  # Requires multi-step reasoning
     confidence: float = 0.0
+    needs_trial_evidence: bool = False  # query asks about trial results/evidence
 
 
 @dataclass
@@ -85,6 +87,10 @@ class RetrievedChunk:
     headings: Dict[str, str] = field(default_factory=dict)
     similarity_score: float = 0.0
     relevance_score: float = 0.0  # After reranking
+
+    source_type: str = "review_notes"  # "review_notes" (FAISS) | "clinical_trial" (KB)
+    document_title: str = ""           # e.g. "CROSS Trial, NEJM 2012"
+    s3_location: str = ""              # full S3 URI of source file
 
 
 @dataclass

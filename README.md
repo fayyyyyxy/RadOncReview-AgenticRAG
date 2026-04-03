@@ -75,8 +75,7 @@ Before using this system, ensure you have:
 
 ## Setup
 
-### Step 1: Install Dependencies
-
+### Step 1 — Install Dependencies
 ```bash
 # Create virtual environment (recommended)
 python -m venv venv
@@ -89,51 +88,53 @@ pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 ```
 
-### Step 2: Configure AWS Credentials
+### Step 2 — Set up external services
 
+Before running the data preparation pipeline, you must complete two one-time setup steps:
+
+**Google Docs API** — needed to pull treatment guideline documents from Google Docs.
+Follow the setup guide: [`data_prep/setup-guides/GoogleDocsAPI-setup.pdf`](data_prep/setup-guides/GoogleDocsAPI-setup.pdf)
+
+This will produce two credential files that must be placed inside `data_prep/`:
+- `credentials.json` — OAuth2 client credentials downloaded from Google Cloud Console
+- `token.json` — generated automatically on first run via browser-based OAuth flow
+
+**AWS CLI** — needed to access S3, DynamoDB, and Bedrock.
+Follow the setup guide: [`data_prep/setup-guides/AWS-CLI-setup.pdf`](data_prep/setup-guides/AWS-CLI-setup.pdf)
+
+
+Once installed, configure your SSO profile (first time only):
 ```bash
-# Login to AWS SSO
-aws sso login --profile YOUR_AWS_PROFILE
-```
-
-If you haven't configured the AWS profile yet:
-
-```bash
-# Configure SSO profile
 aws configure sso --profile YOUR_AWS_PROFILE
-
-# You'll be prompted for:
+# You will be prompted for:
 # - SSO start URL (get from your AWS admin)
 # - SSO region: YOUR_AWS_REGION
 # - Account and role selection
 ```
 
-### Step 3: Verify Configuration
+Then log in (required every session):
+```bash
+aws sso login --profile YOUR_AWS_PROFILE
+```
 
-Edit `config.py` if your AWS settings differ:
+### Step 3 — Verify AWS configuration
 
+Edit `config.py` if your AWS settings differ from the defaults:
 ```python
 @dataclass
 class AWSConfig:
-    profile_name: str = "YOUR_AWS_PROFILE"  # Your AWS profile
-    region: str = "YOUR_AWS_REGION"               # AWS region
-    s3_bucket: str = "YOUR_S3_BUCKET"        # S3 bucket name
-    dynamodb_table: str = "YOUR_DYNAMODB_TABLE"  # DynamoDB table
-    faiss_index_key: str = "radonc_faiss_index.bin"  # FAISS index file
+    profile_name: str = "YOUR_AWS_PROFILE"
+    region: str = "YOUR_AWS_REGION"
+    s3_bucket: str = "YOUR_S3_BUCKET"
+    dynamodb_table: str = "YOUR_DYNAMODB_TABLE"
+    faiss_index_key: str = "radonc_faiss_index.bin"
 ```
 
-### Step 4: Check Available LLM Models
+### Step 4 — Run the data preparation pipeline
 
+> ⚠️ This step only needs to be run **once** (or whenever the source documents are updated).
 ```bash
-python check_available_models.py
-```
-
-This will show which Bedrock models your account can access. Update `config.py` if needed:
-
-```python
-@dataclass
-class LLMConfig:
-    model_id: str = "meta.llama3-70b-instruct-v1:0"  # Change if different model available
+python data_prep/main.py
 ```
 
 ## Usage
@@ -195,19 +196,10 @@ You: quit
 Goodbye!
 ```
 
-### Demo Mode (No AWS Required)
-
-Test the system components without AWS:
+### Streamlit Web UI
 
 ```bash
-# Run all demos with mock data
-python demo.py --mode all
-
-# Test specific components
-python demo.py --mode analysis    # Query analysis
-python demo.py --mode planning    # Task planning
-python demo.py --mode guardrails  # Safety checks
-python demo.py --mode pipeline    # Full pipeline (mock)
+streamlit run ui_streamlit.py
 ```
 
 ### REST API
@@ -271,26 +263,35 @@ for step in response.reasoning_trace:
 ## Project Structure
 
 ```
-agentic_rag/
-├── __init__.py           # Package initialization
-├── config.py             # Configuration settings
-├── models.py             # Data models (QueryAnalysis, AgentResponse, etc.)
+RadOncReview-AgenticRAG/
+├── config.py                   # Configuration settings (AWS, LLM, retrieval)
+├── models.py                   # Data models (QueryAnalysis, AgentResponse, etc.)
+├── agent.py                    # Main agent orchestrator
+├── query_analyzer.py           # Query intent & entity extraction
+├── task_planner.py             # Task decomposition & planning
+├── retriever.py                # FAISS search & DynamoDB retrieval
+├── synthesizer.py              # LLM response generation & self-critique
+├── guardrails.py               # Input/output safety checks
+├── llm_client.py               # AWS Bedrock LLM client
+├── chat.py                     # Interactive CLI chat interface
+├── api.py                      # REST API server (FastAPI)
+├── ui_streamlit.py             # Streamlit web UI
+├── demo.py                     # Demo & component testing scripts
+├── check_available_models.py   # Detect available Bedrock models
+├── requirements.txt            # Python dependencies
 │
-├── agent.py              # Main agent orchestrator
-├── query_analyzer.py     # Query intent & entity extraction
-├── task_planner.py       # Task decomposition & planning
-├── retriever.py          # FAISS search & DynamoDB retrieval
-├── synthesizer.py        # LLM response generation & self-critique
-├── guardrails.py         # Input/output safety checks
-├── llm_client.py         # AWS Bedrock LLM client
-│
-├── chat.py               # Interactive chat interface
-├── api.py                # REST API server
-├── demo.py               # Demo & testing scripts
-├── check_available_models.py  # Detect available Bedrock models
-│
-├── requirements.txt      # Python dependencies
-└── README.md             # This file
+└── data_prep/
+    ├── main.py                 # Data preparation pipeline (run once)
+    ├── extract_doc_json.py     # Pull raw JSON from Google Docs API
+    ├── clean_json.py           # Format raw JSON into hierarchical sections
+    ├── flattening_chunking.py  # Flatten hierarchy + sentence-level chunking
+    ├── embedding.py            # Generate embeddings + build FAISS index
+    ├── DynamoDB_store_load.py  # Upload/load chunks to/from DynamoDB
+    ├── s3_store_load.py        # Upload/load files to/from S3
+    ├── helper.py               # Utility functions
+    └── setup-guides/
+        ├── GoogleDocsAPI-setup.pdf
+        └── AWS-CLI-setup.pdf
 ```
 
 ## Supported Query Types
@@ -346,26 +347,3 @@ Update `config.py` with an available model.
 1. Check if data pipeline has been run (`data_prep/main.py`)
 2. Verify DynamoDB table exists and has data
 3. Verify FAISS index exists in S3
-
-## Configuration Options
-
-### Retrieval Settings (`config.py`)
-
-```python
-@dataclass
-class RetrieverConfig:
-    top_k: int = 15                    # Number of chunks to retrieve
-    similarity_threshold: float = 0.3  # Minimum similarity score
-    rerank_top_k: int = 5              # Final chunks after reranking
-    use_hybrid_search: bool = True     # Combine dense + sparse search
-```
-
-### Agent Settings (`config.py`)
-
-```python
-@dataclass
-class AgentConfig:
-    max_iterations: int = 5            # Max reasoning iterations
-    enable_self_critique: bool = True  # Enable answer self-evaluation
-    confidence_threshold: float = 0.7  # Minimum confidence to answer
-```

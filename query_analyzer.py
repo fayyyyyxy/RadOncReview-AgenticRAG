@@ -79,10 +79,26 @@ class QueryAnalyzer:
         "TBI": [r'\bTBI\b', r'\btotal\s+body\s+irradiation\b'],
         "TSEI": [r'\bTSEI\b', r'\btotal\s+skin\s+electron\b']
     }
+
+    # Patterns that suggest user wants published trial data
+    # Used to populate needs_trial_evidence flag (informational, not used for routing)
+    TRIAL_EVIDENCE_PATTERNS = [
+        r'\btrial\b', r'\bRCT\b', r'\brandomized\b',
+        r'\bphase [123]\b', r'\bNEJM\b', r'\bJCO\b', r'\bLancet\b',
+        r'\bhazard ratio\b', r'\bmedian OS\b', r'\boverall survival\b',
+        r'\bDFS\b', r'\bPFS\b', r'\bp[\s-]?value\b',
+        r'\bGerman rectal\b', r'\bCROSS\b', r'\bRTOG\b', r'\bEORTC\b',
+        r'\bpublished\b', r'\bevidence\b',
+    ]
     
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
+
+    def _detect_trial_evidence_need(self, query: str) -> bool:
+        """Return True if query is asking about trial results or published evidence."""
+        query_lower = query.lower()
+        return any(re.search(p, query_lower) for p in self.TRIAL_EVIDENCE_PATTERNS)
     
     def _match_patterns(self, text: str, patterns: dict) -> Optional[str]:
         """Match text against a dictionary of regex patterns."""
@@ -175,7 +191,9 @@ class QueryAnalyzer:
             confidence += 0.1
         if entities:
             confidence += 0.05
-        
+
+        needs_trial_evidence = self._detect_trial_evidence_need(query)
+
         return QueryAnalysis(
             original_query=query,
             intent=intent,
@@ -183,7 +201,8 @@ class QueryAnalyzer:
             treatment_modality=treatment_modality,
             key_entities=entities,
             is_complex=is_complex,
-            confidence=min(confidence, 1.0)
+            confidence=min(confidence, 1.0),
+            needs_trial_evidence=needs_trial_evidence
         )
     
     def analyze_with_llm(self, query: str) -> QueryAnalysis:
@@ -247,7 +266,8 @@ Extract the following information in JSON format:
                     key_entities=result.get("key_entities", []),
                     temporal_context=result.get("temporal_context"),
                     is_complex=result.get("is_complex", False),
-                    confidence=0.9  # LLM analysis has higher confidence
+                    confidence=0.9,  # LLM analysis has higher confidence
+                    needs_trial_evidence=self._detect_trial_evidence_need(query)
                 )
         except Exception as e:
             print(f"LLM analysis failed, falling back to rule-based: {e}")
