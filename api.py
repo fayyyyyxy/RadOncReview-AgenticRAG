@@ -4,6 +4,8 @@ Provides endpoints for querying and managing the system.
 """
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import uvicorn
@@ -11,6 +13,7 @@ from datetime import datetime
 import hashlib
 import hmac
 import os
+from pathlib import Path
 
 from agent import AgenticRAGEngine, create_agent
 from config import Config, default_config
@@ -227,6 +230,24 @@ async def list_modalities(api_key: str = Depends(verify_api_key)):
             {"id": "proton", "name": "Proton Therapy", "description": "Particle beam therapy"},
         ]
     }
+
+
+# ============ Static Frontend ============
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/", tags=["Frontend"])
+async def serve_frontend():
+    """Serve the chat UI."""
+    index_path = STATIC_DIR / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="Frontend not found")
+    return FileResponse(index_path, media_type="text/html")
+
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ============ Run Server ============
