@@ -1,0 +1,294 @@
+"""
+Generate test questions for KB retrieval evaluation.
+
+Logic:
+  For each disease site folder in S3:
+    For each of 5 clinical topics:
+      1. Retrieve top K chunks from Bedrock KB
+      2. Call Nova Pro with those chunks → generate 3 QA pairs
+  Output: test_questions.csv
+"""
+
+import boto3
+import json
+import csv
+import time
+import re
+import os
+
+
+AWS_PROFILE          = "YOUR_AWS_PROFILE"
+AWS_REGION           = "YOUR_AWS_REGION"
+S3_BUCKET            = "YOUR_S3_BUCKET"
+S3_PREFIX            = "reading-lists/"
+KB_ID                = "YOUR_KB_ID"
+DS_ID                = "YOUR_KB_DATASOURCE_ID"
+NOVA_MODEL_ID        = "us.amazon.nova-pro-v1:0"
+OUTPUT_CSV           = "test_questions.csv"
+
+CHUNKS_PER_TOPIC     = 80   # chunks retrieved per topic
+QUESTIONS_PER_TOPIC  = 3    # questions generated per topic
+
+# 5 Clinical topics targeting KB trial paper content
+TOPICS = [
+    {
+        "name": "treatment_outcomes_survival",
+        "query_suffix": "overall survival local control biochemical recurrence radiation",
+        "instruction": "Focus on survival outcomes, biochemical control, local control rates, and OS/PFS data from clinical trials."
+    },
+    {
+        "name": "dose_fractionation",
+        "query_suffix": "radiation dose Gy fractions hypofractionation schedule",
+        "instruction": "Focus on specific dose and fractionation schedules used in trials — total dose, dose per fraction, number of fractions, treatment duration."
+    },
+    {
+        "name": "toxicity_side_effects",
+        "query_suffix": "toxicity acute late adverse events radiation complications grade",
+        "instruction": "Focus on acute and late toxicity rates, grade 2/3+ toxicity data, specific side effects reported in trials."
+    },
+    {
+        "name": "trial_comparison",
+        "query_suffix": "randomized trial hazard ratio p-value treatment arms comparison",
+        "instruction": "Focus on comparisons between treatment arms, hazard ratios, p-values, and conclusions from randomized trials."
+    },
+    {
+        "name": "patient_selection",
+        "query_suffix": "eligibility criteria patient selection risk stratification staging",
+        "instruction": "Focus on patient eligibility criteria, risk group definitions, staging, and which patients were selected for treatment in trials."
+    },
+]
+
+CSV_COLUMNS = [
+    "disease_site",
+    "topic",
+    "question",
+    "expected_answer",
+    "source_document"
+]
+
+
+def get_disease_site_folders(s3_client) -> list:
+    """List all top-level disease site folders under reading-lists/ in S3."""
+    response = s3_client.list_objects_v2(
+        Bucket=S3_BUCKET,
+        Prefix=S3_PREFIX,
+        Delimiter="/"
+    )
+    folders = []
+    for prefix in response.get("CommonPrefixes", []):
+        folder = prefix["Prefix"].replace(S3_PREFIX, "").rstrip("/")
+        if folder:
+            folders.append(folder)
+    return sorted(folders)
+
+
+def retrieve_chunks(bedrock_agent, disease_site: str, topic: dict) -> list:
+    """Retrieve top CHUNKS_PER_TOPIC chunks from KB for a disease site + topic."""
+    query = f"{disease_site} {topic['query_suffix']}"
+    try:
+        retrieval_config = {
+            "vectorSearchConfiguration": {
+                "numberOfResults": CHUNKS_PER_TOPIC,
+                "overrideSearchType": "HYBRID"
+            }
+        }
+
+        filters = []
+        if DS_ID:
+            filters.append({
+                "equals": {
+                    "key": "x-amz-bedrock-kb-data-source-id",
+                    "value": DS_ID
+                }
+            })
+        filters.append({
+            "startsWith": {
+                "key": "x-amz-bedrock-kb-source-uri",
+                "value": f"s3://{S3_BUCKET}/{S3_PREFIX}{disease_site}/"
+            }
+        })
+        retrieval_config["vectorSearchConfiguration"]["filter"] = (
+            {"andAll": filters} if len(filters) > 1 else filters[0]
+        )
+
+        response = bedrock_agent.retrieve(
+            knowledgeBaseId=KB_ID,
+            retrievalQuery={"text": query},
+            retrievalConfiguration=retrieval_config
+        )
+
+        chunks = []
+        for r in response.get("retrievalResults", []):
+            text = r.get("content", {}).get("text", "")
+            s3_uri = r.get("location", {}).get("s3Location", {}).get("uri", "")
+
+            # Get document title and top folder from S3 path
+            path_parts = s3_uri.replace(
+                f"s3://{S3_BUCKET}/{S3_PREFIX}", ""
+            ).split("/")
+            doc_title  = path_parts[-1].replace(".pdf", "").replace(".docx", "") if path_parts else s3_uri
+            top_folder = path_parts[0] if path_parts else disease_site
+
+            chunks.append({
+                "text":      text,
+                "doc_title": doc_title,
+                "folder":    top_folder,
+            })
+        return chunks
+
+    except Exception as e:
+        print(f"\n    KB retrieve failed: {e}")
+        return []
+
+
+def format_chunks_for_prompt(chunks: list) -> str:
+    """Format chunks into numbered context string for the LLM prompt."""
+    parts = []
+    for i, chunk in enumerate(chunks):
+        parts.append(
+            f"[Chunk {i+1}] Source: {chunk['folder']} / {chunk['doc_title']}\n"
+            f"{chunk['text']}"
+        )
+    return "\n\n---\n\n".join(parts)
+
+
+def generate_qa_pairs(
+    bedrock_runtime,
+    disease_site: str,
+    topic: dict,
+    chunks: list
+) -> list:
+    """Call Nova Pro with retrieved chunks to generate QA pairs."""
+
+    context = format_chunks_for_prompt(chunks)
+
+    prompt = f"""You are a radiation oncology expert creating test questions to evaluate a clinical RAG system.
+
+Disease site: {disease_site}
+Topic focus: {topic['name']}
+
+The following are excerpts from actual clinical trial papers and radiation oncology literature for {disease_site}:
+
+{context}
+
+{topic['instruction']}
+
+Based ONLY on the content above, generate exactly {QUESTIONS_PER_TOPIC} question-answer pairs.
+
+Requirements:
+- Each question MUST come from a DIFFERENT source document — do not generate multiple questions from the same paper
+- Questions should be phrased as a radiation oncology clinician would naturally ask in clinic
+- Answers should be grounded in the text and include relevant clinical data when available
+- For source_document, copy the exact Source name from the chunk header (e.g. "Gastrointestinal / German Rectal Trial, NEJM 2004")
+- Do NOT use any knowledge outside the provided chunks
+
+Return ONLY a valid JSON array, no other text, no markdown fences:
+[
+  {{
+    "question": "...",
+    "answer": "...",
+    "source_document": "..."
+  }}
+]"""
+
+    # Nova Pro uses Converse API format
+    request_body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"text": prompt}]
+            }
+        ],
+        "inferenceConfig": {
+            "maxTokens": 2000,
+            "temperature": 0.3
+        }
+    }
+
+    try:
+        response = bedrock_runtime.invoke_model(
+            modelId=NOVA_MODEL_ID,
+            body=json.dumps(request_body)
+        )
+        response_body = json.loads(response["body"].read())
+
+        # Parse Nova Pro response
+        raw = response_body["output"]["message"]["content"][0]["text"].strip()
+
+        # Strip markdown fences if present
+        if "```" in raw:
+            raw = re.sub(r"```(?:json)?", "", raw).strip()
+
+        qa_pairs = json.loads(raw)
+        return qa_pairs[:QUESTIONS_PER_TOPIC]
+
+    except json.JSONDecodeError as e:
+        print(f"\n    JSON parse failed: {e} | raw: {raw[:150]}")
+        return []
+    except Exception as e:
+        print(f"\n    Nova Pro call failed: {e}")
+        return []
+
+
+def main():
+    # AWS clients
+    session         = boto3.Session(profile_name=AWS_PROFILE)
+    s3              = session.client("s3",                    region_name=AWS_REGION)
+    bedrock_agent   = session.client("bedrock-agent-runtime", region_name=AWS_REGION)
+    bedrock_runtime = session.client("bedrock-runtime",       region_name=AWS_REGION)
+
+    # Get disease site folders from S3
+    print("\nFetching disease site folders from S3...")
+    folders = get_disease_site_folders(s3)
+    print(f"Found {len(folders)} folders: {folders}")
+    print(f"\nPlan: {len(folders)} sites × {len(TOPICS)} topics × {QUESTIONS_PER_TOPIC} questions"
+          f" = {len(folders) * len(TOPICS) * QUESTIONS_PER_TOPIC} total questions\n")
+
+    # Open CSV
+    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+
+        total_questions = 0
+        total_calls     = len(folders) * len(TOPICS)
+        call_count      = 0
+
+        for disease_site in folders:
+            print(f"\n── {disease_site} ──────────────────────────────")
+
+            for topic in TOPICS:
+                call_count += 1
+                print(f"  [{call_count:2d}/{total_calls}] {topic['name']:<35}", end=" ", flush=True)
+
+                # Step 1: Retrieve chunks from KB
+                chunks = retrieve_chunks(bedrock_agent, disease_site, topic)
+                if not chunks:
+                    print("→ 0 chunks, skipping")
+                    continue
+                print(f"→ {len(chunks):2d} chunks", end=" ", flush=True)
+
+                # Step 2: Generate QA pairs with Nova Pro
+                qa_pairs = generate_qa_pairs(bedrock_runtime, disease_site, topic, chunks)
+                if not qa_pairs:
+                    print("→ failed")
+                    continue
+                print(f"→ {len(qa_pairs)} questions ✓")
+
+                # Step 3: Write to CSV immediately (safe even if script stops mid-run)
+                for qa in qa_pairs:
+                    writer.writerow({
+                        "disease_site":    disease_site,
+                        "topic":           topic["name"],
+                        "question":        qa.get("question", ""),
+                        "expected_answer": qa.get("answer", ""),
+                        "source_document": qa.get("source_document", ""),
+                    })
+                    total_questions += 1
+                csvfile.flush()
+                # Small delay to avoid Bedrock throttling
+                time.sleep(0.5)
+            
+    print(f"✓ Generated {total_questions} questions → {os.path.abspath(OUTPUT_CSV)}")
+
+if __name__ == "__main__":
+    main()
