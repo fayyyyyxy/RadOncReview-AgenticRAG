@@ -43,6 +43,9 @@ class CitationResponse(BaseModel):
     source_path: str
     relevance_score: float
     excerpt: Optional[str] = None
+    source_url: Optional[str] = None
+    document_title: Optional[str] = None
+    source_type: str = "review_notes"
 
 
 class QueryResponse(BaseModel):
@@ -160,7 +163,10 @@ async def query_guidelines(
                     citation_id=citation.citation_id,
                     source_path=citation.source_path,
                     relevance_score=citation.relevance_score,
-                    excerpt=citation.chunk_text[:200] if citation.chunk_text else None
+                    excerpt=citation.chunk_text[:200] if citation.chunk_text else None,
+                    source_url=citation.source_url or None,
+                    document_title=citation.document_title or None,
+                    source_type=citation.source_type,
                 ))
         
         # Build response
