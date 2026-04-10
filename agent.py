@@ -245,6 +245,24 @@ class AgenticRAGEngine:
             reranked_by_topic[label] = final_chunks
 
         return reranked_by_topic 
+    
+    def _enrich_citations_with_urls(self, citations: List[Citation]) -> List[Citation]:
+        for citation in citations:
+            if not citation.source_url:
+                continue
+            if citation.source_url.startswith("s3://"):
+                try:
+                    path = citation.source_url.replace("s3://", "")
+                    bucket = path.split("/")[0]
+                    key = "/".join(path.split("/")[1:])
+                    citation.source_url = self.retriever.s3.generate_presigned_url(
+                        "get_object",
+                        Params={"Bucket": bucket, "Key": key},
+                        ExpiresIn=604800  # 7 days expire
+                    )
+                except Exception as e:
+                    print(f"Presigned URL generation failed: {e}")
+        return citations
 
 
     
@@ -400,6 +418,8 @@ class AgenticRAGEngine:
             # Add warning but don't block
             final_answer = f"⚠️ Note: {'; '.join(output_check.warnings)}\n\n{final_answer}"
         
+        citations = self._enrich_citations_with_urls(citations)
+
         # ========== Build Final Response ==========
         latency_ms = (time.time() - start_time) * 1000
         self._log_reasoning("COMPLETE", f"Total latency: {latency_ms:.0f}ms")

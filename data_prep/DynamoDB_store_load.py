@@ -2,11 +2,11 @@ import boto3
 from botocore.exceptions import ClientError
 
 
-def upload_to_dynamodb(profile_name, table_name, flattened_chunks):
+def upload_to_dynamodb(profile_name, table_name, flattened_chunks, region="YOUR_AWS_REGION"):
     """ Store flattened chunks into DynamoDB table. Using FAISS_ID as the Partition Key (PK)."""
     session = boto3.Session(profile_name=profile_name)
-    dynamodb = session.resource("dynamodb")
-
+    
+    dynamodb = session.resource("dynamodb", region_name=region)
     try:
         # Define KeySchema with FAISS_ID (Number) as the HASH key
         table = dynamodb.create_table(

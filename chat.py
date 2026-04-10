@@ -86,6 +86,7 @@ def main():
                 print("\nSources:")
                 for c in response.citations[:5]:  # Show top 5
                     print(f"  [{c.citation_id}] {c.source_path}")
+                    print(f"      URL: {c.source_url}")
         
 
             # Print LLM Judge Evaluations if available

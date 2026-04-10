@@ -59,7 +59,10 @@ Guidelines for your responses:
                 source_path=path,
                 chunk_text=text[:500],  # Truncate for storage
                 relevance_score=float(score) if score else 0.0,
-                faiss_id=chunk.get("faiss_id", -1)
+                faiss_id=chunk.get("faiss_id", -1),
+                source_url=chunk.get("s3_location", ""),            # 
+                document_title=chunk.get("document_title", ""),     # 
+                source_type=source_type   
             ))
         
         context = "\n---\n".join(context_parts)

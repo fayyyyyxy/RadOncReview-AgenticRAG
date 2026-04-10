@@ -280,7 +280,10 @@ class RetrieverManager:
                 path=chunk.get("path", ""),
                 category=chunk.get("category", ""),
                 headings=headings,
-                similarity_score=id_to_score.get(faiss_id, 0.0)
+                similarity_score=id_to_score.get(faiss_id, 0.0),
+                source_type="review_notes",                        # 
+                document_title=chunk.get("category", ""),          # 
+                s3_location=chunk.get("document_url", "") 
             ))
         
         # Sort by similarity score

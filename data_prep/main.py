@@ -32,6 +32,7 @@ DOCUMENTS_TO_PROCESS = [
         "disease_category": "Breast",
         "document_id": "1sWQwqcSH23B30CKCVOaQ2kb4D4qES6YfPqmgJYR5rnY"
     },
+    
     {
         "disease_category": "Thorax",
         "document_id": "1oKD3L5ieCk03FWU6fCnj8aiHKRPJD-q6IpjXpQCuexw"
@@ -83,6 +84,7 @@ def process_document(doc_config, current_faiss_id):
     """
     disease_category = doc_config["disease_category"]
     document_id = doc_config["document_id"]
+    document_url = f"https://docs.google.com/document/d/{document_id}" 
     print(f"\n--- Starting Ingestion for Document: {disease_category.upper()} ---")
 
     # 1. Extract raw JSON from Google Doc
@@ -105,20 +107,20 @@ def process_document(doc_config, current_faiss_id):
 
     # 4. Flatten and chunk the JSON data
     token_counter_model = "text-embedding-3-large" # For estimating tokens in chunking only 
-    flattened_chunks = flatten_chunk_json(clean_json, token_counter_model, max_tokens, overlap_tokens, current_faiss_id)
+    flattened_chunks = flatten_chunk_json(clean_json, token_counter_model, max_tokens, overlap_tokens, current_faiss_id, document_url=document_url)
     save_json(disease_category, "chunks", save_dir, flattened_chunks)
 
     # The FAISS_ID for the next document starts after the last ID used here
     next_faiss_id = flattened_chunks[-1]["FAISS_ID"] + 1
     
     # 5. Upload flattened chunks to DynamoDB
-    upload_to_dynamodb(PROFILE_NAME, DYNAMODB_TABLE_NAME, flattened_chunks)
+    upload_to_dynamodb(PROFILE_NAME, DYNAMODB_TABLE_NAME, flattened_chunks, region=REGION)
 
     # 6. Add embeddings
     chunk_embeddings = add_embeddings(flattened_chunks, EMBEDDING_MODEL, PROFILE_NAME, REGION) 
     save_json(disease_category, "chunk_embeddings", save_dir, chunk_embeddings)
 
-    return chunk_embeddings, next_faiss_id
+    return next_faiss_id
 
 
 def main():
@@ -136,23 +138,24 @@ def main():
     for doc in DOCUMENTS_TO_PROCESS:
         try:
             # Process document and get its chunks and the ID for the next document
-            doc_chunks, current_faiss_id = process_document(doc, current_faiss_id)
-            all_chunk_embeddings.extend(doc_chunks)
+            #doc_chunks, current_faiss_id = process_document(doc, current_faiss_id)
+            current_faiss_id = process_document(doc, current_faiss_id) 
+            #all_chunk_embeddings.extend(doc_chunks)
         except Exception as e:
             print(f"Failed to process document {doc['disease_category']}: {e}")
             continue 
 
     # 7. Build FAISS Index for ALL documents and upload it to S3
-    if all_chunk_embeddings:
-        local_faiss_path = os.path.join(save_dir, FAISS_INDEX_FILE)
-        build_faiss_index(all_chunk_embeddings, local_faiss_path)
+    # if all_chunk_embeddings:
+    #     local_faiss_path = os.path.join(save_dir, FAISS_INDEX_FILE)
+    #     build_faiss_index(all_chunk_embeddings, local_faiss_path)
         
-        index_file_to_upload = [(local_faiss_path, FAISS_INDEX_FILE)]
-        upload_file_to_s3(index_file_to_upload, S3_BUCKET_NAME, PROFILE_NAME)
-        print(f"FAISS Index successfully uploaded to s3://{S3_BUCKET_NAME}/{FAISS_INDEX_FILE}")
+    #     index_file_to_upload = [(local_faiss_path, FAISS_INDEX_FILE)]
+    #     upload_file_to_s3(index_file_to_upload, S3_BUCKET_NAME, PROFILE_NAME)
+    #     print(f"FAISS Index successfully uploaded to s3://{S3_BUCKET_NAME}/{FAISS_INDEX_FILE}")
         
-    else:
-        print("No documents processed successfully. FAISS index not built.")
+    # else:
+    #     print("No documents processed successfully. FAISS index not built.")
 
 
 if __name__ == "__main__":

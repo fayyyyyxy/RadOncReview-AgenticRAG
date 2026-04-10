@@ -89,7 +89,7 @@ def chunk_by_sentences(text: str, max_tokens: int , overlap_tokens: int, model_n
     return chunks
 
 
-def flatten_chunk_json(json_data, model_name, max_tokens, overlap_tokens, start_faiss_id):
+def flatten_chunk_json(json_data, model_name, max_tokens, overlap_tokens, start_faiss_id, document_url=""):
     """ 
     Flatten, chunk, and assign a unique sequential FAISS_ID to each chunk.
     start_faiss_id ensures IDs are unique when running multiple ingestion jobs.
@@ -110,6 +110,7 @@ def flatten_chunk_json(json_data, model_name, max_tokens, overlap_tokens, start_
             chunk_entry["chunk_id"] = i + 1
             # Add Path to each chunk's text for context
             chunk_entry["text"] = f"Title: {entry['path']}\n\nContent: {chunk}"
+            chunk_entry["document_url"] = document_url  # url
             flattened_chunks.append(chunk_entry)
             faiss_id_counter += 1
 

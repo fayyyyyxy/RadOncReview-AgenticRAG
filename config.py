@@ -11,7 +11,7 @@ class AWSConfig:
     profile_name: str = "YOUR_AWS_PROFILE"
     region: str = "YOUR_AWS_REGION"
     s3_bucket: str = "YOUR_S3_BUCKET"
-    dynamodb_table: str = "YOUR_DYNAMODB_TABLE"
+    dynamodb_table: str = "YOUR_DYNAMODB_TABLE"  
     faiss_index_key: str = "radonc_faiss_index.bin"
 
     knowledge_base_id: str = "YOUR_KB_ID"

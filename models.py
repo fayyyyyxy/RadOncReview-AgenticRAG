@@ -101,6 +101,9 @@ class Citation:
     chunk_text: str
     relevance_score: float
     faiss_id: int
+    source_url: Optional[str] = None        # source url
+    document_title: Optional[str] = None    # 
+    source_type: str = "review_notes"       # 
 
 
 @dataclass
