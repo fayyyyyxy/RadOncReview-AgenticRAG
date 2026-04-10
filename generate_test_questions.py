@@ -15,16 +15,17 @@ import csv
 import time
 import re
 import os
+from config import default_config
 
 
-AWS_PROFILE          = "YOUR_AWS_PROFILE"
-AWS_REGION           = "YOUR_AWS_REGION"
-S3_BUCKET            = "YOUR_S3_BUCKET"
-S3_PREFIX            = "reading-lists/"
-KB_ID                = "YOUR_KB_ID"
-DS_ID                = "YOUR_KB_DATASOURCE_ID"
-NOVA_MODEL_ID        = "us.amazon.nova-pro-v1:0"
-OUTPUT_CSV           = "test_questions.csv"
+AWS_PROFILE   = default_config.aws.profile_name
+AWS_REGION    = default_config.aws.region 
+S3_BUCKET     = default_config.aws.s3_bucket
+KB_ID         = default_config.aws.knowledge_base_id 
+DS_ID         = default_config.aws.knowledge_base_datasource_id 
+S3_PREFIX     = "reading-lists/"
+NOVA_MODEL_ID = "us.amazon.nova-pro-v1:0"
+OUTPUT_CSV    = "test_questions.csv"
 
 CHUNKS_PER_TOPIC     = 80   # chunks retrieved per topic
 QUESTIONS_PER_TOPIC  = 3    # questions generated per topic
@@ -34,27 +35,27 @@ TOPICS = [
     {
         "name": "treatment_outcomes_survival",
         "query_suffix": "overall survival local control biochemical recurrence radiation",
-        "instruction": "Focus on survival outcomes, biochemical control, local control rates, and OS/PFS data from clinical trials."
+        "instruction": "This topic covers clinical outcomes from radiation oncology trials, including overall survival, progression-free survival, local control, and biochemical recurrence rates."
     },
     {
         "name": "dose_fractionation",
         "query_suffix": "radiation dose Gy fractions hypofractionation schedule",
-        "instruction": "Focus on specific dose and fractionation schedules used in trials — total dose, dose per fraction, number of fractions, treatment duration."
+        "instruction": "This topic covers radiation dose and fractionation used in trials, including total dose, fractionation schedules, hypofractionation rationale, and comparisons between different regimens."
     },
     {
         "name": "toxicity_side_effects",
         "query_suffix": "toxicity acute late adverse events radiation complications grade",
-        "instruction": "Focus on acute and late toxicity rates, grade 2/3+ toxicity data, specific side effects reported in trials."
+        "instruction": "This topic covers radiation-related toxicity reported in trials, including acute and late side effects, toxicity grades, organ-specific complications, and quality of life impact."
     },
     {
         "name": "trial_comparison",
         "query_suffix": "randomized trial hazard ratio p-value treatment arms comparison",
-        "instruction": "Focus on comparisons between treatment arms, hazard ratios, p-values, and conclusions from randomized trials."
+        "instruction": "This topic covers randomized trial design and results, including treatment arm comparisons, primary endpoints, hazard ratios, statistical significance, and clinical conclusions."
     },
     {
         "name": "patient_selection",
         "query_suffix": "eligibility criteria patient selection risk stratification staging",
-        "instruction": "Focus on patient eligibility criteria, risk group definitions, staging, and which patients were selected for treatment in trials."
+        "instruction": "This topic covers patient selection in radiation oncology trials, including eligibility criteria, risk group stratification, staging, tumor characteristics, and which subgroups benefited most."
     },
 ]
 
@@ -177,7 +178,9 @@ Based ONLY on the content above, generate exactly {QUESTIONS_PER_TOPIC} question
 
 Requirements:
 - Each question MUST come from a DIFFERENT source document — do not generate multiple questions from the same paper
+- Each question should have a different clinical focus — do not repeat the same question structure across the {QUESTIONS_PER_TOPIC} questions
 - Questions should be phrased as a radiation oncology clinician would naturally ask in clinic
+- Questions MUST be phrased as a question ending with "?" — not a statement
 - Answers should be grounded in the text and include relevant clinical data when available
 - For source_document, copy the exact Source name from the chunk header (e.g. "Gastrointestinal / German Rectal Trial, NEJM 2004")
 - Do NOT use any knowledge outside the provided chunks
