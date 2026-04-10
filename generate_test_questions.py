@@ -233,6 +233,52 @@ Return ONLY a valid JSON array, no other text, no markdown fences:
         return []
 
 
+def is_valid_question(qa: dict) -> bool:
+    """Validate a QA pair — must be a proper question with non-empty answer."""
+    question = qa.get("question", "").strip()
+    answer   = qa.get("answer", "").strip()
+    return (
+        question.endswith("?")   # must be a question
+        and len(question) > 20   # not too short
+        and len(answer) > 10     # answer must not be empty
+    )
+
+
+def generate_with_retry(
+    bedrock_runtime,
+    disease_site: str,
+    topic: dict,
+    chunks: list,
+    max_retries: int = 3
+) -> list:
+    """
+    Generate QA pairs with automatic retry until QUESTIONS_PER_TOPIC valid questions are collected or max_retries is reached.
+    Deduplicates by question text to avoid repeats across retries.
+    """
+    valid_pairs  = []
+    seen_questions = set()
+    attempts     = 0
+
+    while len(valid_pairs) < QUESTIONS_PER_TOPIC and attempts < max_retries:
+        attempts += 1
+        pairs = generate_qa_pairs(bedrock_runtime, disease_site, topic, chunks)
+
+        for qa in pairs:
+            q_text = qa.get("question", "").strip()
+            if (is_valid_question(qa)
+                    and q_text not in seen_questions
+                    and len(valid_pairs) < QUESTIONS_PER_TOPIC):
+                valid_pairs.append(qa)
+                seen_questions.add(q_text)
+
+        if len(valid_pairs) < QUESTIONS_PER_TOPIC:
+            print(f"\n   Only {len(valid_pairs)} valid question(s), retrying ({attempts}/{max_retries})...",
+                  end=" ", flush=True)
+            time.sleep(0.3)
+
+    return valid_pairs
+
+
 def main():
     # AWS clients
     session         = boto3.Session(profile_name=AWS_PROFILE)
@@ -270,8 +316,8 @@ def main():
                     continue
                 print(f"→ {len(chunks):2d} chunks", end=" ", flush=True)
 
-                # Step 2: Generate QA pairs with Nova Pro
-                qa_pairs = generate_qa_pairs(bedrock_runtime, disease_site, topic, chunks)
+                # Step 2: Generate QA pairs with Nova Pro (with retry for invalid questions)
+                qa_pairs = generate_with_retry(bedrock_runtime, disease_site, topic, chunks)
                 if not qa_pairs:
                     print("→ failed")
                     continue
