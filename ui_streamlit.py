@@ -190,11 +190,26 @@ def display_response(response: AgentResponse):
     if response.citations:
         with st.expander(f"📚 View Citations ({len(response.citations)})", expanded=False):
             for citation in response.citations:
+                # Build title line: prefer document_title for clinical trials
+                title = citation.document_title if citation.document_title else citation.source_path
+
+                # Source type badge
+                if citation.source_type == "clinical_trial":
+                    badge = '<span style="background:#4E2A84;color:white;border-radius:4px;padding:1px 7px;font-size:0.75rem;font-weight:600;margin-left:6px;">Clinical Trial</span>'
+                else:
+                    badge = '<span style="background:#6c757d;color:white;border-radius:4px;padding:1px 7px;font-size:0.75rem;font-weight:600;margin-left:6px;">Review Notes</span>'
+
+                # Link for source URL if present
+                if citation.source_url:
+                    title_html = f'<a href="{citation.source_url}" target="_blank" style="color:#4E2A84;text-decoration:underline;">{title}</a>'
+                else:
+                    title_html = title
+
                 st.markdown(f"""
                 <div class="citation-box">
-                    <strong>[{citation.citation_id}] {citation.source_path}</strong><br>
-                    <em>Relevance: {citation.relevance_score:.2%}</em><br><br>
-                    <div style="font-size: 0.9rem; line-height: 1.5;">
+                    <strong>[{citation.citation_id}]</strong> {title_html} {badge}<br>
+                    <em style="color:#555;">Relevance: {citation.relevance_score:.2%}</em><br><br>
+                    <div style="font-size: 0.9rem; line-height: 1.5; color: #333;">
                         {citation.chunk_text[:300]}{'...' if len(citation.chunk_text) > 300 else ''}
                     </div>
                 </div>
