@@ -90,7 +90,11 @@ class AgenticRAGEngine:
         for task in plan.sub_tasks:
             if task.status == TaskStatus.COMPLETED:
                 for chunk in task.retrieved_chunks:
-                    chunk_id = chunk.get("faiss_id")
+                    source_type = chunk.get("source_type", "review_notes")
+                    if source_type == "clinical_trial":
+                        chunk_id = f"{chunk.get('s3_location', '')}_{chunk.get('text', '')[:100]}"
+                    else:
+                        chunk_id = chunk.get("faiss_id")
                     if chunk_id not in seen_ids:
                         all_chunks.append(chunk)
                         seen_ids.add(chunk_id)
@@ -152,12 +156,12 @@ class AgenticRAGEngine:
 
         Groups FAISS and KB tasks that share the same subtopic query together,
         so each logical subtopic gets chunks from BOTH sources merged before reranking.
-        Each topic → rerank all sources together → top complex_rerank_top_k=5 chunks.
+        Each topic → rerank all sources together → top complex_rerank_top_k=3 chunks.
 
         Example for "Compare SBRT vs EBRT":
           Tasks: [Guidelines]SBRT, [Trial papers]SBRT, [Guidelines]EBRT, [Trial papers]EBRT
-          Groups: {"SBRT prostate": 20 chunks, "EBRT prostate": 20 chunks}
-          Result: {"SBRT prostate": 5 chunks, "EBRT prostate": 5 chunks} → 10 to LLM
+          Groups: {"SBRT prostate": 16 chunks (FAISS6+KB10), "EBRT prostate": 16 chunks}
+          Result: {"SBRT prostate": 3 chunks, "EBRT prostate": 3 chunks} → 6 to LLM
         """
         from models import RetrievedChunk
         chunks_by_topic = {}
@@ -183,7 +187,11 @@ class AgenticRAGEngine:
         for topic_key, data in chunks_by_topic.items():
             deduped = []
             for chunk in data["chunks"]:
-                chunk_id = chunk.get("faiss_id")
+                source_type = chunk.get("source_type", "review_notes")
+                if source_type == "clinical_trial":
+                    chunk_id = f"{chunk.get('s3_location', '')}_{chunk.get('text', '')[:100]}"
+                else:
+                    chunk_id = chunk.get("faiss_id")
                 if chunk_id not in all_seen_ids:
                     deduped.append(chunk)
                     all_seen_ids.add(chunk_id)
@@ -200,7 +208,7 @@ class AgenticRAGEngine:
             chunks = data["chunks"]
 
             if not chunks:
-                reranked_by_topic[label] = []
+                reranked_by_topic[topic_key] = []
                 continue
 
             # Convert to RetrievedChunk objects for cross-encoder
@@ -242,7 +250,7 @@ class AgenticRAGEngine:
                     "s3_location": chunk.s3_location
                 })
 
-            reranked_by_topic[label] = final_chunks
+            reranked_by_topic[topic_key] = final_chunks
 
         return reranked_by_topic 
     
