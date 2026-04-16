@@ -38,12 +38,18 @@ class EmbeddingConfig:
 @dataclass
 class RetrieverConfig:
     """Retrieval configuration."""
-    top_k: int = 15  # Number of chunks to retrieve initially for simple queries
-    similarity_threshold: float = 0.3  # Minimum similarity score (lowered for better recall)
-    rerank_top_k: int = 7  # Final number after reranking for simple queries
-    complex_top_k: int = 10  # Number to retrieve per subtask
-    complex_rerank_top_k: int = 5  # Final number per topic after reranking
-    use_hybrid_search: bool = True  # Combine dense + sparse retrieval
+    top_k: int = 15                  # fallback for retriever.py (not used directly in planning)
+    similarity_threshold: float = 0.3
+
+    # Simple query
+    faiss_top_k: int = 6             # FAISS retrieve for simple queries
+    kb_top_k: int = 10              # KB retrieve for simple queries
+    rerank_top_k: int = 8           # final chunks sent to LLM after rerank
+
+    # Complex query
+    faiss_complex_top_k: int = 6    # FAISS retrieve per subtopic task
+    kb_complex_top_k: int = 10      # KB retrieve per subtopic task
+    complex_rerank_top_k: int = 3   # final chunks per topic after rerank
 
 
 @dataclass

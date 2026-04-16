@@ -59,6 +59,7 @@ class TaskPlanner:
                 description=f"Search RadOncReview guidelines: {analysis.original_query[:80]}",
                 query=search_query,
                 retrieval_strategy=RetrievalStrategy.DENSE,
+                top_k=self.config.retriever.faiss_top_k,
                 status=TaskStatus.PENDING
             ),
             # Task 2: KB — reading list clinical trial papers
@@ -67,6 +68,7 @@ class TaskPlanner:
                 description=f"Search clinical trial papers: {analysis.original_query[:80]}",
                 query=search_query,
                 retrieval_strategy=RetrievalStrategy.KNOWLEDGE_BASE,
+                top_k=self.config.retriever.kb_top_k,
                 status=TaskStatus.PENDING
             ),
         ]
@@ -162,8 +164,6 @@ Remember: Generate the optimal number of tasks (2-3) that comprehensively cover 
                 tasks_to_process = result["sub_tasks"][:3]  # cap at 3 subtopics
                 num_tasks = len(tasks_to_process)
 
-                task_top_k = self.config.retriever.complex_top_k if num_tasks in [2, 3] else None
-
                 for i, task in enumerate(tasks_to_process):
                     subtopic_query = task.get("query", analysis.original_query)
 
@@ -173,7 +173,7 @@ Remember: Generate the optimal number of tasks (2-3) that comprehensively cover 
                         description=f"[Guidelines] {task.get('description', f'Sub-task {i+1}')}",
                         query=subtopic_query,
                         retrieval_strategy=RetrievalStrategy.DENSE,
-                        top_k=task_top_k,
+                        top_k=self.config.retriever.faiss_complex_top_k,
                         status=TaskStatus.PENDING
                     ))
                     sub_tasks.append(SubTask(
@@ -181,7 +181,7 @@ Remember: Generate the optimal number of tasks (2-3) that comprehensively cover 
                         description=f"[Trial papers] {task.get('description', f'Sub-task {i+1}')}",
                         query=subtopic_query,
                         retrieval_strategy=RetrievalStrategy.KNOWLEDGE_BASE,
-                        top_k=task_top_k,
+                        top_k=self.config.retriever.kb_complex_top_k,
                         status=TaskStatus.PENDING
                     ))
 
@@ -234,6 +234,7 @@ Respond in the same JSON format as before."""
                         description=f"[Guidelines] {task.get('description', '')}",
                         query=subtopic_query,
                         retrieval_strategy=RetrievalStrategy.DENSE,
+                        top_k=self.config.retriever.faiss_complex_top_k,
                         status=TaskStatus.PENDING
                     ))
                     new_sub_tasks.append(SubTask(
@@ -241,6 +242,7 @@ Respond in the same JSON format as before."""
                         description=f"[Trial papers] {task.get('description', '')}",
                         query=subtopic_query,
                         retrieval_strategy=RetrievalStrategy.KNOWLEDGE_BASE,
+                        top_k=self.config.retriever.kb_complex_top_k,
                         status=TaskStatus.PENDING
                     ))
 

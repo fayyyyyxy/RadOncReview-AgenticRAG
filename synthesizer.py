@@ -155,7 +155,7 @@ Answer:"""
                 citation.citation_id = citation_counter
                 citation_counter += 1
             
-            context_parts.append(f"### {topic.upper()} ###\n{topic_context}")
+            context_parts.append(f"### {topic} ###\n{topic_context}")
             all_citations.extend(topic_citations)
         
         full_context = "\n\n".join(context_parts)
