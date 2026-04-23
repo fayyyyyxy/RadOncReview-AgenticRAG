@@ -44,7 +44,7 @@ class RetrieverConfig:
     # Simple query
     faiss_top_k: int = 6             # FAISS retrieve for simple queries
     kb_top_k: int = 10              # KB retrieve for simple queries
-    rerank_top_k: int = 8           # final chunks sent to LLM after rerank
+    rerank_top_k: int = 5           # final chunks sent to LLM after rerank
 
     # Complex query
     faiss_complex_top_k: int = 6    # FAISS retrieve per subtopic task
