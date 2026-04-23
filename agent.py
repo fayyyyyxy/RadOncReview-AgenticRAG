@@ -18,7 +18,6 @@ from retriever import RetrieverManager, MockRetrieverManager
 from synthesizer import ResponseSynthesizer, SelfCritic
 from guardrails import GuardrailManager
 from models import RetrievedChunk
-from llm_judge import create_llm_judge, LLMJudge
 
 
 class AgenticRAGEngine:
@@ -34,16 +33,18 @@ class AgenticRAGEngine:
     6. Safety guardrails
     """
     
-    def __init__(self, config: Config = None, use_mock: bool = False):
+    def __init__(self, config: Config = None, use_mock: bool = False, enable_judge: bool = True):
         """
         Initialize the Agentic RAG Engine.
         
         Args:
             config: Configuration object. Uses default if not provided.
+            enable_judge: If False, skip LLM judge evaluation (for batch eval).
             use_mock: If True, use mock LLM and retriever for testing.
         """
         self.config = config or default_config
         self.use_mock = use_mock
+        self.enable_judge = enable_judge
         
         # Initialize LLM client
         self.llm = create_llm_client(
@@ -68,9 +69,6 @@ class AgenticRAGEngine:
         self.synthesizer = ResponseSynthesizer(self.llm, self.config)
         self.self_critic = SelfCritic(self.llm, self.config.agent)
         self.guardrails = GuardrailManager(self.config.guardrail)
-        
-        # Initialize LLM Judge (requires AWS)
-        self.judge = create_llm_judge(self.config.aws)
         
         # State
         self.conversation_history = []
@@ -467,55 +465,36 @@ class AgenticRAGEngine:
         )
         
         # ========== Step 8: LLM Judge Evaluation ==========
-        if self.judge is not None:
-            self._log_reasoning("JUDGE", "Evaluating answer quality with Llama 3 70B judge")
-            
-            # Extract retrieved context texts for evaluation
+        if self.enable_judge:
             if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-                retrieved_texts = []
-                for topic_chunks in chunks_by_topic.values():
-                    for chunk in topic_chunks[:3]:
-                        retrieved_texts.append(chunk.get("text", ""))
-            else:
                 retrieved_texts = [
                     chunk.get("text", "")
-                    for chunk in all_chunks[:5]
+                    for topic_chunks in chunks_by_topic.values()
+                    for chunk in topic_chunks
                 ]
-            
-            try:
-                judge_evaluations = self.judge.evaluate(
-                    query=user_query,
-                    answer=final_answer,
-                    retrieved_contexts=retrieved_texts
-                )
+            else:
+                retrieved_texts = [chunk.get("text", "") for chunk in all_chunks]
 
-                judge_evaluation = judge_evaluations[0]  # Llama 3 70B only
-                response.metadata["judge_evaluations"] = [
-                    {
-                        "model_name": judge_evaluation.model_name,
-                        "accuracy": judge_evaluation.accuracy.score,
-                        "accuracy_reasoning": judge_evaluation.accuracy.reasoning,
-                        "completeness": judge_evaluation.completeness.score,
-                        "completeness_reasoning": judge_evaluation.completeness.reasoning,
-                        "retrieval_adherence": judge_evaluation.retrieval_adherence.score,
-                        "retrieval_adherence_reasoning": judge_evaluation.retrieval_adherence.reasoning,
-                        "overall_score": judge_evaluation.overall_score,
-                        "overall_reasoning": judge_evaluation.overall_reasoning,
-                        "evaluation_time_ms": judge_evaluation.evaluation_time_ms
-                    }
-                ]
-                
+            try:
+                self._log_reasoning("JUDGE", "Evaluating with v3 multi-agent judge")
+                from llm_judge_v3 import evaluate_single_query
+                eval_result = evaluate_single_query(
+                    question = user_query,
+                    answer   = final_answer,
+                    contexts = retrieved_texts,
+                )
+                response.metadata["judge_evaluations"] = [eval_result]
                 self._log_reasoning("JUDGE",
-                    f"Evaluation complete — Accuracy: {judge_evaluation.accuracy.score}/5, "
-                    f"Completeness: {judge_evaluation.completeness.score}/5, "
-                    f"Retrieval Adherence: {judge_evaluation.retrieval_adherence.score}/5 "
-                    f"(overall {judge_evaluation.overall_score:.2f}/5.00)"
+                    f"Retrieval Adequacy: {eval_result['retrieval_adequacy']}/5, "
+                    f"Faithfulness: {eval_result['faithfulness']}/5, "
+                    f"Correctness: {eval_result['correctness']}/5, "
+                    f"Answer Quality: {eval_result['answer_quality']}/5, "
+                    f"Composite: {eval_result['composite_score']:.2f}/5.00"
+                    + (" ⚠️ ABSTAINED" if eval_result['abstention_triggered'] else "")
                 )
             except Exception as e:
                 err_msg = str(e).lower()
-                is_token_err = "token has expired" in err_msg or "sso" in err_msg or "refresh failed" in err_msg
-                if is_token_err:
-                    # Re-raise so UI can catch it and show the correct message
+                if "token has expired" in err_msg or "sso" in err_msg or "refresh failed" in err_msg:
                     raise
                 self._log_reasoning("JUDGE", f"Evaluation failed: {str(e)}")
                 response.metadata["judge_evaluations"] = []

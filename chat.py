@@ -91,48 +91,47 @@ def main():
 
             # Print LLM Judge Evaluations if available
             if "judge_evaluations" in response.metadata and response.metadata["judge_evaluations"]:
+                ev = response.metadata["judge_evaluations"][0]
+
                 print("\n" + "=" * 70)
-                print("                 LLM JUDGE EVALUATION")
+                print("                 LLM JUDGE EVALUATION (v3)")
                 print("=" * 70)
-                
-                evaluations = response.metadata["judge_evaluations"]
-                
-                for eval in evaluations:
-                    print(f"\n🤖 Judge: {eval['model_name']}")
-                    print(f"📊 Overall Score: {eval['overall_score']:.2f}/5.00")
+
+                # Abstention warning
+                if ev.get("abstention_triggered"):
+                    print("\n  ⚠️  ABSTENTION TRIGGERED — system should not have answered")
+                elif ev.get("should_abstain") == "Yes" and ev.get("did_abstain") == "No":
+                    print("\n  ⚠️  WARNING: System answered but evidence was insufficient")
+
+                print(f"\n  Abstention: Should={ev.get('should_abstain','?')} | Did={ev.get('did_abstain','?')}")
+                print()
+
+                # Sub-scores with visual bars
+                for name, score_key, reasoning_key in [
+                    ("Retrieval Adequacy", "retrieval_adequacy", "retrieval_adequacy_reasoning"),
+                    ("Faithfulness",       "faithfulness",        "faithfulness_reasoning"),
+                    ("Correctness",        "correctness",         "correctness_reasoning"),
+                    ("Answer Quality",     "answer_quality",      "answer_quality_reasoning"),
+                ]:
+                    score = ev.get(score_key, 0)
+                    bar   = "█" * score + "░" * (5 - score)
+                    print(f"  • {name:<20} {score}/5  [{bar}]")
+                    if reasoning_key and ev.get(reasoning_key):
+                        print(f"    {ev[reasoning_key]}")
                     print()
-                    
-                    # Print each criterion with visual bar
-                    for criterion_name, score_key, reasoning_key in [
-                        ("Accuracy", "accuracy", "accuracy_reasoning"),
-                        ("Completeness", "completeness", "completeness_reasoning"),
-                        ("Retrieval Adherence", "retrieval_adherence", "retrieval_adherence_reasoning")
-                    ]:
-                        score = eval[score_key]
-                        reasoning = eval[reasoning_key]
-                        score_bar = "█" * score + "░" * (5 - score)
-                        
-                        print(f"  • {criterion_name}: {score}/5 [{score_bar}]")
-                        print(f"    {reasoning}")
-                        print()
-                    
-                    print(f"  💭 Overall: {eval['overall_reasoning']}")
-                    print()
-                
-                # Calculate and show consensus
-                if len(evaluations) > 1:
-                    avg_accuracy = sum(e["accuracy"] for e in evaluations) / len(evaluations)
-                    avg_completeness = sum(e["completeness"] for e in evaluations) / len(evaluations)
-                    avg_retrieval = sum(e["retrieval_adherence"] for e in evaluations) / len(evaluations)
-                    avg_overall = sum(e["overall_score"] for e in evaluations) / len(evaluations)
-                    
-                    print("-" * 70)
-                    print("CONSENSUS (Average Across Judges):")
-                    print(f"  Accuracy:            {avg_accuracy:.2f}/5.00")
-                    print(f"  Completeness:        {avg_completeness:.2f}/5.00")
-                    print(f"  Retrieval Adherence: {avg_retrieval:.2f}/5.00")
-                    print(f"  Overall:             {avg_overall:.2f}/5.00")
-                
+
+                # Composite
+                composite = ev.get("composite_score", 0.0)
+                pct = (composite / 5.0) * 100
+                if composite >= 4.0:
+                    print(f"  🎯 Composite Score: {composite:.2f}/5.00 ({pct:.0f}%) — Excellent")
+                elif composite >= 3.0:
+                    print(f"  🎯 Composite Score: {composite:.2f}/5.00 ({pct:.0f}%) — Good")
+                elif composite > 0:
+                    print(f"  🎯 Composite Score: {composite:.2f}/5.00 ({pct:.0f}%) — Needs Improvement")
+                else:
+                    print(f"  🎯 Composite Score: 0.00/5.00 — Abstention Gate Triggered")
+
                 print("=" * 70)
             
 
