@@ -41,7 +41,6 @@ import argparse
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import boto3
-import openpyxl
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import default_config, create_boto3_session
@@ -634,6 +633,7 @@ def run_evaluation(
 ):
     # Avoid circular import
     from agent import AgenticRAGEngine
+    import openpyxl
 
     os.makedirs(output_dir, exist_ok=True)
 

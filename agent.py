@@ -476,7 +476,7 @@ class AgenticRAGEngine:
                 retrieved_texts = [chunk.get("text", "") for chunk in all_chunks]
 
             try:
-                self._log_reasoning("JUDGE", "Evaluating with v3 multi-agent judge")
+                self._log_reasoning("JUDGE", "Evaluating with multi-agent judge")
                 from llm_judge_v3 import evaluate_single_query
                 eval_result = evaluate_single_query(
                     question = user_query,
