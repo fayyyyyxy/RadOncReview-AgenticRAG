@@ -8,7 +8,7 @@ def add_embeddings(chunks, model_id, aws_profile, region):
     Add embedding vectors to flattened chunk entries using Amazon embedding model.
     """
 
-    session = boto3.Session(profile_name=aws_profile)
+    session = boto3.Session(profile_name=aws_profile) if aws_profile else boto3.Session()
     bedrock = session.client("bedrock-runtime", region_name=region)
 
     for item in chunks:

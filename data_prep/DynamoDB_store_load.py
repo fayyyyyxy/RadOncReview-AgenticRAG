@@ -4,7 +4,7 @@ from botocore.exceptions import ClientError
 
 def upload_to_dynamodb(profile_name, table_name, flattened_chunks, region="YOUR_AWS_REGION"):
     """ Store flattened chunks into DynamoDB table. Using FAISS_ID as the Partition Key (PK)."""
-    session = boto3.Session(profile_name=profile_name)
+    session = boto3.Session(profile_name=profile_name) if profile_name else boto3.Session()
     
     dynamodb = session.resource("dynamodb", region_name=region)
     try:

@@ -12,7 +12,7 @@ from collections import Counter
 from sentence_transformers import CrossEncoder
 
 from models import RetrievedChunk, SubTask, RetrievalStrategy, TaskStatus
-from config import RetrieverConfig, EmbeddingConfig, AWSConfig
+from config import RetrieverConfig, EmbeddingConfig, AWSConfig, create_boto3_session
 
 
 class CrossEncoderReranker:
@@ -81,7 +81,7 @@ class RetrieverManager:
         self.aws_config = aws_config
         
         # Initialize AWS clients with explicit region
-        self.session = boto3.Session(profile_name=aws_config.profile_name)
+        self.session = create_boto3_session(aws_config)
         self.bedrock = self.session.client("bedrock-runtime", region_name=aws_config.region)
         self.s3 = self.session.client("s3", region_name=aws_config.region)
         self.dynamodb = self.session.resource("dynamodb", region_name=aws_config.region)

@@ -1,22 +1,27 @@
 """
 Configuration settings for the Agentic RAG Engine.
 """
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+import boto3
 
 
 @dataclass
 class AWSConfig:
     """AWS service configuration."""
-    profile_name: str = "YOUR_AWS_PROFILE"
-    region: str = "YOUR_AWS_REGION"
+    # Local dev: defaults to "YOUR_AWS_PROFILE" profile.
+    # EC2 deploy: set AWS_PROFILE_NAME="" to fall back to the instance IAM role.
+    profile_name: Optional[str] = os.getenv("AWS_PROFILE_NAME", "YOUR_AWS_PROFILE") or None
+    region: str = os.getenv("AWS_REGION", "YOUR_AWS_REGION")
     s3_bucket: str = "YOUR_S3_BUCKET"
     dynamodb_table: str = "YOUR_DYNAMODB_TABLE"  
     faiss_index_key: str = "radonc_faiss_index.bin"
 
     knowledge_base_id: str = "YOUR_KB_ID"
     knowledge_base_enabled: bool = True
-    knowledge_base_datasource_id: str = "YOUR_KB_DATASOURCE_ID" 
+    knowledge_base_datasource_id: str = "YOUR_KB_DATASOURCE_ID"
 
 
 @dataclass
@@ -99,3 +104,15 @@ class Config:
 
 # Default configuration instance
 default_config = Config()
+
+
+def create_boto3_session(aws_config: Optional[AWSConfig] = None) -> boto3.Session:
+    """Create a boto3 Session that works both locally (named profile) and on EC2 (instance role).
+
+    If profile_name is set, uses it (local dev). If None/empty, returns a default
+    Session so boto3's credential chain picks up the EC2 instance role.
+    """
+    cfg = aws_config or default_config.aws
+    if cfg.profile_name:
+        return boto3.Session(profile_name=cfg.profile_name)
+    return boto3.Session()

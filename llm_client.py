@@ -7,7 +7,7 @@ import json
 from typing import List, Dict, Optional, Any
 from abc import ABC, abstractmethod
 
-from config import LLMConfig, AWSConfig
+from config import LLMConfig, AWSConfig, create_boto3_session
 
 
 class BaseLLMClient(ABC):
@@ -35,7 +35,7 @@ class BedrockLLMClient(BaseLLMClient):
     def __init__(self, llm_config: LLMConfig, aws_config: AWSConfig):
         self.config = llm_config
         self.aws_config = aws_config
-        self.session = boto3.Session(profile_name=aws_config.profile_name)
+        self.session = create_boto3_session(aws_config)
         self.client = self.session.client(
             "bedrock-runtime", 
             region_name=aws_config.region
