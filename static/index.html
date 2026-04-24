@@ -861,7 +861,8 @@ class ChatApp {
     const welcome = document.getElementById('welcome');
     if (welcome) welcome.remove();
 
-    // Record which conversation this query belongs to
+    // Ensure currentConvId is initialized before recording sentConvId
+    if (!this.currentConvId) this.currentConvId = this.generateId();
     const sentConvId = this.currentConvId;
 
     this.addUserMessage(query);
