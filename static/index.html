@@ -405,10 +405,14 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
 .judge-abstain-warning{margin-bottom:10px;padding:8px 12px;border-radius:6px;font-size:12px;background:rgba(248,113,113,0.12);color:#f87171;border:1px solid rgba(248,113,113,0.2)}
 .judge-badge{display:inline-block;margin-bottom:10px;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;background:rgba(167,139,250,0.12);color:var(--accent);border:1px solid rgba(167,139,250,0.2)}
 .judge-badge:hover{background:rgba(167,139,250,0.2)}
-.score-badge{background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.2)}
+.score-badge{background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.2);cursor:pointer}
+.score-badge:hover{background:rgba(74,222,128,0.2)}
 .score-badge.good{background:rgba(251,191,36,0.12);color:#fbbf24;border-color:rgba(251,191,36,0.2)}
+.score-badge.good:hover{background:rgba(251,191,36,0.2)}
 .score-badge.poor{background:rgba(248,113,113,0.12);color:#f87171;border-color:rgba(248,113,113,0.2)}
+.score-badge.poor:hover{background:rgba(248,113,113,0.2)}
 .score-badge.abstain{background:rgba(248,113,113,0.12);color:#f87171;border-color:rgba(248,113,113,0.2)}
+.score-badge.abstain:hover{background:rgba(248,113,113,0.2)}
 
 /* ============ Animations ============ */
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -1023,7 +1027,7 @@ class ChatApp {
             const triggered = ev.abstention_triggered;
             const scoreClass = triggered ? 'abstain' : composite >= 4.0 ? '' : composite >= 3.0 ? 'good' : 'poor';
             const scoreLabel = triggered ? 'Abstained' : composite >= 4.0 ? 'Excellent' : composite >= 3.0 ? 'Good' : 'Poor';
-            return `<span class="meta-badge score-badge ${scoreClass}" onclick="app.toggleJudge('judge-${msgId}')">🎯 ${composite.toFixed(2)}/5 — ${scoreLabel}</span>`;
+            return `<span class="meta-badge score-badge ${scoreClass}" onclick="app.toggleJudge('judge-${msgId}')">🎯 Score: ${composite.toFixed(2)}/5 (${scoreLabel})</span>`;
           })() : ''}
           <button class="btn-copy" onclick="app.copyAnswer('${msgId}')" title="Copy">
             <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
