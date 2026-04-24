@@ -4,8 +4,10 @@ Detect which Bedrock models are available for your AWS account.
 import boto3
 import json
 
-PROFILE = "YOUR_AWS_PROFILE"
-REGION = "YOUR_AWS_REGION"
+from config import create_boto3_session, default_config
+
+PROFILE = default_config.aws.profile_name
+REGION = default_config.aws.region
 
 # List of common models to test
 MODELS_TO_TEST = [
@@ -74,7 +76,7 @@ def main():
     print(f"Region: {REGION}\n")
     
     try:
-        session = boto3.Session(profile_name=PROFILE)
+        session = create_boto3_session()
         bedrock = session.client("bedrock-runtime", region_name=REGION)
     except Exception as e:
         print(f"ERROR - Cannot create Bedrock client: {e}")

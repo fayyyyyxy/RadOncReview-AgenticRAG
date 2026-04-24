@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 import boto3
 
-from config import AWSConfig
+from config import AWSConfig, create_boto3_session
 
 
 @dataclass
@@ -45,7 +45,7 @@ class LLMJudge:
     def __init__(self, aws_config: AWSConfig):
         """Initialize the LLM Judge with Llama 3 models."""
         self.aws_config = aws_config
-        self.session = boto3.Session(profile_name=aws_config.profile_name)
+        self.session = create_boto3_session(aws_config)
         self.client = self.session.client(
             "bedrock-runtime",
             region_name=aws_config.region

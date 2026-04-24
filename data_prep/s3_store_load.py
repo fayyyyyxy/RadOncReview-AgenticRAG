@@ -25,7 +25,7 @@ def create_s3_bucket(bucket_name, profile_name, region):
 
 def upload_json_to_s3(json_data, bucket_name, profile_name, s3_key):
     """ Upload JSON data directly to an S3 bucket. """
-    session = boto3.Session(profile_name=profile_name)
+    session = boto3.Session(profile_name=profile_name) if profile_name else boto3.Session()
     s3 = session.client("s3")
     
     # Serialize JSON to a string, then encode it to bytes
@@ -42,7 +42,7 @@ def upload_json_to_s3(json_data, bucket_name, profile_name, s3_key):
 def upload_file_to_s3(files, bucket_name, profile_name):
     """ Upload file(s) to an S3 bucket. """
 
-    session = boto3.Session(profile_name=profile_name)
+    session = boto3.Session(profile_name=profile_name) if profile_name else boto3.Session()
     s3 = session.client("s3")
 
     for local_path, s3_key in files:
@@ -53,7 +53,7 @@ def upload_file_to_s3(files, bucket_name, profile_name):
 def load_from_s3(bucket_name, profile_name, s3_key):
     """ Load a file from S3 bucket. """
 
-    session = boto3.Session(profile_name=profile_name)
+    session = boto3.Session(profile_name=profile_name) if profile_name else boto3.Session()
     s3 = session.client("s3")
     obj = s3.get_object(Bucket=bucket_name, Key=s3_key)
     data = obj["Body"].read()

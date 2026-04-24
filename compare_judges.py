@@ -288,7 +288,7 @@ def load_completed(csv_path: str) -> set:
 #     print("=" * 60)
 # ── Main ───────────────────────────────────────────────────────────────────────
 def run(sheet_names=None):
-    from config import default_config
+    from config import default_config, create_boto3_session
     from agent import AgenticRAGEngine
 
     wb = openpyxl.load_workbook(EXCEL_FILE)
@@ -300,7 +300,7 @@ def run(sheet_names=None):
     print(f"Output: {OUTPUT_FILE}\n")
 
     agent  = AgenticRAGEngine(config=default_config)
-    session = boto3.Session(profile_name=default_config.aws.profile_name)
+    session = create_boto3_session()
     client  = session.client("bedrock-runtime", region_name=default_config.aws.region)
 
     completed = load_completed(OUTPUT_FILE)

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 import boto3
 import openpyxl
-from config import default_config
+from config import default_config, create_boto3_session
 from agent import AgenticRAGEngine
 
 
@@ -56,7 +56,7 @@ class EvalResult:
 
 class LLMJudgeV2:
     def __init__(self):
-        self.session = boto3.Session(profile_name=default_config.aws.profile_name)
+        self.session = create_boto3_session()
         self.client  = self.session.client(
             "bedrock-runtime",
             region_name=default_config.aws.region

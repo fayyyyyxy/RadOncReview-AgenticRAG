@@ -44,7 +44,7 @@ import boto3
 import openpyxl
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import default_config
+from config import default_config, create_boto3_session
 
 
 EXCEL_FILE       = "KP_test_questions_REVISED.xlsx"
@@ -181,7 +181,7 @@ class LLMJudgeV3:
 
     def __init__(self, calibrator: Optional[CSVCalibrator] = None):
         self.calibrator = calibrator
-        self.session    = boto3.Session(profile_name=default_config.aws.profile_name)
+        self.session    = create_boto3_session()
         self.client     = self.session.client(
             "bedrock-runtime", region_name=default_config.aws.region
         )

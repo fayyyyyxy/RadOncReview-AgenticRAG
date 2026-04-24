@@ -15,7 +15,7 @@ import csv
 import time
 import re
 import os
-from config import default_config
+from config import default_config, create_boto3_session
 
 
 AWS_PROFILE   = default_config.aws.profile_name
@@ -281,7 +281,7 @@ def generate_with_retry(
 
 def main():
     # AWS clients
-    session         = boto3.Session(profile_name=AWS_PROFILE)
+    session         = create_boto3_session()
     s3              = session.client("s3",                    region_name=AWS_REGION)
     bedrock_agent   = session.client("bedrock-agent-runtime", region_name=AWS_REGION)
     bedrock_runtime = session.client("bedrock-runtime",       region_name=AWS_REGION)
