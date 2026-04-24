@@ -398,6 +398,17 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
 .judge-score-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--primary),var(--accent));transition:width .5s ease}
 .judge-score-value{width:30px;text-align:right;color:var(--text-primary);font-weight:600;flex-shrink:0}
 .judge-reasoning{font-size:11px;color:var(--text-secondary);margin-top:6px;line-height:1.5;padding:8px;background:rgba(0,0,0,0.1);border-radius:6px}
+.judge-composite{margin-top:12px;padding:10px 12px;border-radius:8px;font-size:13px;font-weight:600;text-align:center}
+.judge-composite.excellent{background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.2)}
+.judge-composite.good{background:rgba(251,191,36,0.12);color:#fbbf24;border:1px solid rgba(251,191,36,0.2)}
+.judge-composite.poor{background:rgba(248,113,113,0.12);color:#f87171;border:1px solid rgba(248,113,113,0.2)}
+.judge-abstain-warning{margin-bottom:10px;padding:8px 12px;border-radius:6px;font-size:12px;background:rgba(248,113,113,0.12);color:#f87171;border:1px solid rgba(248,113,113,0.2)}
+.judge-badge{display:inline-block;margin-bottom:10px;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;background:rgba(167,139,250,0.12);color:var(--accent);border:1px solid rgba(167,139,250,0.2)}
+.judge-badge:hover{background:rgba(167,139,250,0.2)}
+.score-badge{background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.2)}
+.score-badge.good{background:rgba(251,191,36,0.12);color:#fbbf24;border-color:rgba(251,191,36,0.2)}
+.score-badge.poor{background:rgba(248,113,113,0.12);color:#f87171;border-color:rgba(248,113,113,0.2)}
+.score-badge.abstain{background:rgba(248,113,113,0.12);color:#f87171;border-color:rgba(248,113,113,0.2)}
 
 /* ============ Animations ============ */
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -627,7 +638,7 @@ class ChatApp {
     this.conversations[this.currentConvId] = {
       id: this.currentConvId,
       title,
-      messages: this.messages,
+      messages: this.messages.map(m => ({...m})),  // snapshot, not reference
       updatedAt: Date.now(),
       createdAt: this.conversations[this.currentConvId]?.createdAt || Date.now()
     };
@@ -682,7 +693,23 @@ class ChatApp {
 
   switchConversation(id) {
     if (id === this.currentConvId) return;
-    this.saveCurrentConversation();
+    // Save current conversation only if it's not the target
+    // (to avoid overwriting a pending response that was saved there)
+    if (this.currentConvId && this.messages.length > 0) {
+      const firstUserMsg = this.messages.find(m => m.role === 'user');
+      const title = firstUserMsg ? firstUserMsg.content.substring(0, 60) : 'New Chat';
+      const existing = this.conversations[this.currentConvId];
+      // Only overwrite if our current messages are newer (more messages)
+      if (!existing || this.messages.length >= existing.messages.length) {
+        this.conversations[this.currentConvId] = {
+          id: this.currentConvId,
+          title,
+          messages: this.messages.map(m => ({...m})),
+          updatedAt: Date.now(),
+          createdAt: existing?.createdAt || Date.now()
+        };
+      }
+    }
     this.currentConvId = id;
     localStorage.setItem(this.CURRENT_KEY, id);
     this.restoreConversation(id);
@@ -834,13 +861,31 @@ class ChatApp {
     const welcome = document.getElementById('welcome');
     if (welcome) welcome.remove();
 
+    // Record which conversation this query belongs to
+    const sentConvId = this.currentConvId;
+
     this.addUserMessage(query);
     this.showThinking();
 
     try {
       const data = await this.callAPI(query);
       this.removeThinking();
-      this.addAssistantMessage(data);
+
+      if (this.currentConvId === sentConvId) {
+        // Still on same chat — render normally
+        this.addAssistantMessage(data);
+      } else {
+        // User switched chat — silently save response to original chat
+        const ts = this.formatTime();
+        const conv = this.conversations[sentConvId];
+        if (conv) {
+          // Push to the stored snapshot (independent from this.messages)
+          conv.messages.push({role: 'assistant', data, time: ts});
+          conv.updatedAt = Date.now();
+          this.saveConversations();
+          this.renderHistory();
+        }
+      }
     } catch (err) {
       this.removeThinking();
       this.addErrorMessage(err.message || 'Request failed. Please check if the backend service is running.');
@@ -971,6 +1016,14 @@ class ChatApp {
           <span class="meta-badge latency-badge">${data.latency_ms?.toFixed(0) ?? '—'}ms</span>
           ${data.citations?.length ? `<span class="meta-badge citations-badge" onclick="app.togglePanel('cit-${msgId}')">${data.citations.length} citation${data.citations.length > 1 ? 's' : ''}</span>` : ''}
           ${data.reasoning_trace?.length ? `<span class="meta-badge citations-badge" onclick="app.togglePanel('reason-${msgId}')">Reasoning</span>` : ''}
+          ${data.metadata?.judge_evaluations?.length > 0 ? (() => {
+            const ev = data.metadata.judge_evaluations[0];
+            const composite = ev.composite_score ?? ev.overall_score ?? 0;
+            const triggered = ev.abstention_triggered;
+            const scoreClass = triggered ? 'abstain' : composite >= 4.0 ? '' : composite >= 3.0 ? 'good' : 'poor';
+            const scoreLabel = triggered ? 'Abstained' : composite >= 4.0 ? 'Excellent' : composite >= 3.0 ? 'Good' : 'Poor';
+            return `<span class="meta-badge score-badge ${scoreClass}" onclick="app.toggleJudge('judge-${msgId}')">🎯 ${composite.toFixed(2)}/5 — ${scoreLabel}</span>`;
+          })() : ''}
           <button class="btn-copy" onclick="app.copyAnswer('${msgId}')" title="Copy">
             <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
@@ -989,30 +1042,45 @@ class ChatApp {
   }
 
   renderJudgePanel(evaluations, msgId) {
-    let content = evaluations.map(ev => {
-      const dims = [
-        {label: 'Accuracy', score: ev.accuracy, reasoning: ev.accuracy_reasoning},
-        {label: 'Completeness', score: ev.completeness, reasoning: ev.completeness_reasoning},
-        {label: 'Retrieval Adherence', score: ev.retrieval_adherence, reasoning: ev.retrieval_adherence_reasoning},
-      ];
-      return `
-        <div class="judge-model">
-          <div class="judge-model-name">${this.escapeHtml(ev.model_name)} — Overall: ${ev.overall_score?.toFixed(2)}/5.00</div>
-          <div class="judge-scores">
-            ${dims.map(d => `
-              <div class="judge-score-row">
-                <span class="judge-score-label">${d.label}</span>
-                <div class="judge-score-bar"><div class="judge-score-fill" style="width:${(d.score/5)*100}%"></div></div>
-                <span class="judge-score-value">${d.score}/5</span>
-              </div>`).join('')}
-          </div>
-          ${ev.overall_reasoning ? `<div class="judge-reasoning">${this.escapeHtml(ev.overall_reasoning)}</div>` : ''}
-        </div>`;
-    }).join('');
+    const ev = evaluations[0];
+    if (!ev) return '';
+
+    const composite = ev.composite_score ?? ev.overall_score ?? 0;
+    const compClass = composite >= 4.0 ? 'excellent' : composite >= 3.0 ? 'good' : 'poor';
+    const compLabel = composite >= 4.0 ? 'Excellent' : composite >= 3.0 ? 'Good' : composite > 0 ? 'Needs Improvement' : 'Abstention Triggered';
+
+    const dims = [
+      {label: 'Retrieval Adequacy', score: ev.retrieval_adequacy, reasoning: ev.retrieval_adequacy_reasoning},
+      {label: 'Faithfulness',       score: ev.faithfulness,       reasoning: ev.faithfulness_reasoning},
+      {label: 'Correctness',        score: ev.correctness,        reasoning: ev.correctness_reasoning},
+      {label: 'Answer Quality',     score: ev.answer_quality,     reasoning: ev.answer_quality_reasoning},
+    ];
+
+    const abstentionWarning = ev.abstention_triggered
+      ? `<div class="judge-abstain-warning">⚠️ Abstention Triggered — system should not have answered</div>`
+      : (ev.should_abstain === 'Yes' && ev.did_abstain === 'No')
+        ? `<div class="judge-abstain-warning">⚠️ System answered despite insufficient evidence</div>`
+        : '';
+
+    const scoresHTML = dims.map(d => `
+      <div class="judge-score-row">
+        <span class="judge-score-label">${d.label}</span>
+        <div class="judge-score-bar"><div class="judge-score-fill" style="width:${((d.score||0)/5)*100}%"></div></div>
+        <span class="judge-score-value">${d.score ?? 0}/5</span>
+      </div>
+      ${d.reasoning ? `<div class="judge-reasoning">${this.escapeHtml(d.reasoning)}</div>` : ''}
+    `).join('');
+
+    const content = `
+      ${abstentionWarning}
+      <div class="judge-scores">${scoresHTML}</div>
+      <div class="judge-composite ${compClass}">
+        🎯 Composite Score: ${composite.toFixed(2)}/5.00 — ${compLabel}
+      </div>`;
 
     return `
       <div class="judge-panel" id="judge-${msgId}">
-        <div class="judge-header" onclick="app.toggleJudge('judge-${msgId}')">LLM Judge Evaluation</div>
+        <div class="judge-header" onclick="app.toggleJudge('judge-${msgId}')">🎯 Judge Evaluation — ${composite.toFixed(2)}/5.00</div>
         <div class="judge-content">${content}</div>
       </div>`;
   }
