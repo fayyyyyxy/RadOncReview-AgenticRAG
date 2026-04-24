@@ -8,12 +8,21 @@ from typing import List, Optional
 import boto3
 
 
+def _resolve_profile_name() -> Optional[str]:
+    """Local dev: defaults to "YOUR_AWS_PROFILE" profile.
+    Managed runtime (EC2/App Runner): set AWS_PROFILE_NAME to "" or "none"
+    to fall back to the instance/task IAM role.
+    """
+    raw = os.getenv("AWS_PROFILE_NAME", "YOUR_AWS_PROFILE")
+    if raw.strip().lower() in ("", "none"):
+        return None
+    return raw
+
+
 @dataclass
 class AWSConfig:
     """AWS service configuration."""
-    # Local dev: defaults to "YOUR_AWS_PROFILE" profile.
-    # EC2 deploy: set AWS_PROFILE_NAME="" to fall back to the instance IAM role.
-    profile_name: Optional[str] = os.getenv("AWS_PROFILE_NAME", "YOUR_AWS_PROFILE") or None
+    profile_name: Optional[str] = field(default_factory=_resolve_profile_name)
     region: str = os.getenv("AWS_REGION", "YOUR_AWS_REGION")
     s3_bucket: str = "YOUR_S3_BUCKET"
     dynamodb_table: str = "YOUR_DYNAMODB_TABLE"  
