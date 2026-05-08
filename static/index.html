@@ -267,9 +267,6 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
 .meta-badge{
   font-size:11px;padding:4px 10px;border-radius:20px;display:flex;align-items:center;gap:5px;
 }
-.confidence-badge{background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.2)}
-.confidence-badge.medium{background:rgba(251,191,36,0.12);color:#fbbf24;border-color:rgba(251,191,36,0.2)}
-.confidence-badge.low{background:rgba(248,113,113,0.12);color:#f87171;border-color:rgba(248,113,113,0.2)}
 .latency-badge{background:rgba(102,126,234,0.12);color:var(--primary);border:1px solid rgba(102,126,234,0.2)}
 .citations-badge{background:rgba(167,139,250,0.12);color:var(--accent);border:1px solid rgba(167,139,250,0.2);cursor:pointer}
 .citations-badge:hover{background:rgba(167,139,250,0.2)}
@@ -967,10 +964,6 @@ class ChatApp {
 
   renderAssistantBubble(container, data, ts, animate = false) {
     const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4);
-    const confidence = data.confidence_score ?? 0;
-    const confClass = confidence >= 0.7 ? '' : confidence >= 0.4 ? ' medium' : ' low';
-    const confLabel = confidence >= 0.7 ? 'High' : confidence >= 0.4 ? 'Med' : 'Low';
-
     const div = document.createElement('div');
     div.className = 'message assistant';
 
@@ -1017,7 +1010,6 @@ class ChatApp {
       <div class="message-content">
         <div class="message-bubble" id="bubble-${msgId}"></div>
         <div class="message-meta">
-          <span class="meta-badge confidence-badge${confClass}">Confidence ${(confidence * 100).toFixed(0)}% (${confLabel})</span>
           <span class="meta-badge latency-badge">${data.latency_ms?.toFixed(0) ?? '—'}ms</span>
           ${data.citations?.length ? `<span class="meta-badge citations-badge" onclick="app.togglePanel('cit-${msgId}')">${data.citations.length} citation${data.citations.length > 1 ? 's' : ''}</span>` : ''}
           ${data.reasoning_trace?.length ? `<span class="meta-badge citations-badge" onclick="app.togglePanel('reason-${msgId}')">Reasoning</span>` : ''}
@@ -1026,7 +1018,7 @@ class ChatApp {
             const composite = ev.composite_score ?? ev.overall_score ?? 0;
             const triggered = ev.abstention_triggered;
             const scoreClass = triggered ? 'abstain' : composite >= 4.0 ? '' : composite >= 3.0 ? 'good' : 'poor';
-            const scoreLabel = triggered ? 'Abstained' : composite >= 4.0 ? 'Excellent' : composite >= 3.0 ? 'Good' : 'Poor';
+            const scoreLabel = triggered ? 'Abstained' : composite >= 4.0 ? 'Good' : composite >= 3.0 ? 'Fair' : 'Poor';
             return `<span class="meta-badge score-badge ${scoreClass}" onclick="app.toggleJudge('judge-${msgId}')">🎯 Score: ${composite.toFixed(2)}/5 (${scoreLabel})</span>`;
           })() : ''}
           <button class="btn-copy" onclick="app.copyAnswer('${msgId}')" title="Copy">
@@ -1052,13 +1044,13 @@ class ChatApp {
 
     const composite = ev.composite_score ?? ev.overall_score ?? 0;
     const compClass = composite >= 4.0 ? 'excellent' : composite >= 3.0 ? 'good' : 'poor';
-    const compLabel = composite >= 4.0 ? 'Excellent' : composite >= 3.0 ? 'Good' : composite > 0 ? 'Needs Improvement' : 'Abstention Triggered';
+    const compLabel = composite >= 4.0 ? 'Good' : composite >= 3.0 ? 'Fair' : composite > 0 ? 'Poor' : 'Abstention Triggered';
 
     const dims = [
       {label: 'Retrieval Adequacy', score: ev.retrieval_adequacy, reasoning: ev.retrieval_adequacy_reasoning},
       {label: 'Faithfulness',       score: ev.faithfulness,       reasoning: ev.faithfulness_reasoning},
-      {label: 'Correctness',        score: ev.correctness,        reasoning: ev.correctness_reasoning},
-      {label: 'Answer Quality',     score: ev.answer_quality,     reasoning: ev.answer_quality_reasoning},
+      {label: 'Correctness (Raw)',  score: ev.correctness,        reasoning: ev.correctness_reasoning},
+      {label: 'Answer Quality (Raw)', score: ev.answer_quality,   reasoning: ev.answer_quality_reasoning},
     ];
 
     const abstentionWarning = ev.abstention_triggered
@@ -1081,6 +1073,9 @@ class ChatApp {
       <div class="judge-scores">${scoresHTML}</div>
       <div class="judge-composite ${compClass}">
         🎯 Composite Score: ${composite.toFixed(2)}/5.00 — ${compLabel}
+      </div>
+      <div style="font-size:11px;color:#888;margin-top:6px;line-height:1.5;padding:0 2px;">
+        ℹ️ Composite is a weighted combination of Faithfulness, Retrieval Adequacy, and human-calibrated Correctness &amp; Answer Quality (Isotonic Regression against human labels to correct for systematic LLM over-scoring).
       </div>`;
 
     return `

@@ -18,17 +18,15 @@ Batch eval (run_evaluation):
 
 Chatbot (evaluate_single_query):
   Runs Mode B only (no expected_answer)
-  Applies calibration if calibration/ folder exists
+  Loads calibration_map.json + weights.json from calibration/ folder
+  Applies Isotonic calibration: lookup table {raw_score: calibrated_value}
   Computes composite score
 
 Calibration:
-  Place calibration/ folder with per-criteria CSVs:
-    calibration/faithfulness.csv
-    calibration/correctness.csv      ← trained on correctness_b scores
-    calibration/answer_quality.csv
-    calibration/retrieval_adequacy.csv
-  Each CSV: raw_score,calibrated_score (5 rows for scores 1-5)
-  If missing → raw scores used directly (composite still computed)
+  Run calibration.py first to generate:
+    calibration/calibration_map.json  — per-criteria lookup table
+    calibration/weights.json          — normalized Spearman weights
+  llm_judge_v3 will raise FileNotFoundError if these are missing.
 """
 
 import csv
@@ -53,14 +51,6 @@ JUDGE_MODEL_ID   = "us.amazon.nova-pro-v1:0"
 DELAY_BETWEEN_Q  = 2.0
 CALIBRATION_DIR  = "calibration"
 
-# Placeholder for composite score weights — will be updated after calibration
-WEIGHTS_B = {
-    "retrieval_adequacy": 0.20,
-    "faithfulness":       0.35,
-    "correctness":        0.20,
-    "answer_quality":     0.25,
-}
-
 ABSTENTION_PHRASES = [
     "i don't have", "i cannot find", "not enough information",
     "insufficient evidence", "unable to answer", "no relevant information",
@@ -78,10 +68,70 @@ CSV_COLUMNS = [
     "correctness_a_score",          # with expected_answer
     "correctness_b_score",          # RAG proxy
     "answer_quality_score",
-    "calibrated_composite_score",   # -1 until calibration done
 ]
 
 
+# Calibration loading
+def _load_calibration(cal_dir: str = CALIBRATION_DIR) -> tuple:
+    """
+    Load calibration_map.json and weights.json from calibration/.
+    Raises FileNotFoundError if either file is missing — run calibration.py first.
+    """
+    for fname in ["calibration_map.json", "weights.json"]:
+        path = os.path.join(cal_dir, fname)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Missing {path} — run calibration.py first"
+            )
+    with open(os.path.join(cal_dir, "calibration_map.json")) as f:
+        calibration_map = json.load(f)
+    with open(os.path.join(cal_dir, "weights.json")) as f:
+        weights = json.load(f)
+    print(f"  Calibration loaded from {cal_dir}/")
+    return calibration_map, weights
+
+
+# Lazy-loaded — not executed at import time.
+# Loaded on first call to _calibrate() or _get_weights().
+# This allows run_evaluation() (batch eval) to run without calibration files present.
+_CALIBRATION_MAP: Optional[dict] = None
+_WEIGHTS_B: Optional[dict] = None
+
+
+def _get_calibration() -> tuple:
+    global _CALIBRATION_MAP, _WEIGHTS_B
+    if _CALIBRATION_MAP is None:
+        _CALIBRATION_MAP, _WEIGHTS_B = _load_calibration()
+    return _CALIBRATION_MAP, _WEIGHTS_B
+
+
+def _calibrate(criteria: str, raw_score: float) -> float:
+    """Apply Isotonic calibration: lookup table {raw_score: calibrated_value}."""
+    calibration_map, _ = _get_calibration()
+    lookup = calibration_map.get(criteria)
+    if lookup is None:
+        return float(raw_score)   # no calibration for this criteria (e.g. faithfulness, retrieval)
+    key = str(int(raw_score))
+    return float(lookup.get(key, raw_score))
+
+
+def _get_weights() -> dict:
+    _, weights = _get_calibration()
+    return weights
+
+
+# Module-level singleton — initialized once on import, reused for every query
+_judge_singleton: Optional["LLMJudgeV3"] = None
+
+def _get_judge() -> "LLMJudgeV3":
+    global _judge_singleton
+    if _judge_singleton is None:
+        _judge_singleton = LLMJudgeV3()
+        print("  LLMJudgeV3 singleton initialized.")
+    return _judge_singleton
+
+
+# Dataclasses
 @dataclass
 class RetrievalAdequacyResult:
     score: int = 0
@@ -135,53 +185,12 @@ class BatchJudgeV3Result:
     abstention_triggered: bool = False
 
 
-# CSV Calibrator
-class CSVCalibrator:
-    """Loads isotonic regression lookup tables from calibration/ CSV files."""
-    CRITERIA = ["faithfulness", "correctness", "answer_quality", "retrieval_adequacy"]
-
-    def __init__(self, calibration_dir: str):
-        self.mappings: Dict[str, Dict[int, float]] = {}
-        self._load(calibration_dir)
-
-    def _load(self, calibration_dir: str):
-        for criteria in self.CRITERIA:
-            path = os.path.join(calibration_dir, f"{criteria}.csv")
-            if not os.path.exists(path):
-                continue
-            mapping = {}
-            with open(path, "r") as f:
-                for row in csv.DictReader(f):
-                    mapping[int(float(row["raw_score"]))] = float(row["calibrated_score"])
-            if mapping:
-                self.mappings[criteria] = mapping
-                print(f"  Calibration loaded: {criteria}")
-
-    def transform(self, criteria: str, raw_score: int) -> float:
-        if criteria not in self.mappings:
-            return float(raw_score)
-        clamped = max(1, min(5, raw_score))
-        return self.mappings[criteria].get(clamped, float(raw_score))
-
-
-def load_calibrator(calibration_dir: str) -> Optional[CSVCalibrator]:
-    if not os.path.isdir(calibration_dir):
-        print("No calibration folder — using raw scores.")
-        return None
-    cal = CSVCalibrator(calibration_dir)
-    if not cal.mappings:
-        print("Calibration folder empty — using raw scores.")
-        return None
-    return cal
-
-
 # LLM Judge V3
 class LLMJudgeV3:
 
-    def __init__(self, calibrator: Optional[CSVCalibrator] = None):
-        self.calibrator = calibrator
-        self.session    = create_boto3_session()
-        self.client     = self.session.client(
+    def __init__(self):
+        self.session = create_boto3_session()
+        self.client  = self.session.client(
             "bedrock-runtime", region_name=default_config.aws.region
         )
 
@@ -203,9 +212,9 @@ class LLMJudgeV3:
                 "topP": 0.9,
             }
         })
-        resp = self.client.invoke_model(modelId=JUDGE_MODEL_ID, body=body)
+        resp     = self.client.invoke_model(modelId=JUDGE_MODEL_ID, body=body)
         body_out = json.loads(resp["body"].read())
-        gen = body_out["output"]["message"]["content"][0]["text"].strip()
+        gen      = body_out["output"]["message"]["content"][0]["text"].strip()
         if gen.startswith("```"):
             gen = re.sub(r"```(?:json)?", "", gen).strip().rstrip("`").strip()
         return gen
@@ -444,10 +453,6 @@ Return ONLY valid JSON:
 
     # Abstention check
     def check_did_abstain(self, answer: str) -> str:
-        """
-        Uses LLM to determine whether the system actually abstained in its answer,
-        rather than hardcoded phrase matching.
-        """
         prompt = f"""You are evaluating whether a radiation oncology RAG system actually abstained from answering.
 
 Generated Answer: {answer}
@@ -472,7 +477,6 @@ Return ONLY valid JSON:
             d = self._parse(self._invoke(prompt, max_tokens=256))
             return d.get("did_abstain", "No")
         except Exception:
-            # Fallback to phrase matching if LLM fails
             return "Yes" if any(p in answer.lower() for p in ABSTENTION_PHRASES) else "No"
 
     # Composite (chatbot only, Mode B)
@@ -483,23 +487,22 @@ Return ONLY valid JSON:
         faithfulness: FaithfulnessResult,
         correctness_b: CorrectnessResult,
         answer_quality: AnswerQualityResult,
-    ) -> tuple[float, bool]:
+    ) -> tuple:
         if abstention.judgment == "Should Have Abstained":
             return 0.0, True
 
-        scores = {
+        raw_scores = {
             "retrieval_adequacy": retrieval_adequacy.score,
             "faithfulness":       faithfulness.score,
             "correctness":        correctness_b.score,
             "answer_quality":     answer_quality.score,
         }
 
-        # Apply calibration per sub-score
-        if self.calibrator is not None:
-            for dim in scores:
-                scores[dim] = self.calibrator.transform(dim, scores[dim])
+        # Apply Isotonic calibration: lookup table per criteria
+        scores = {k: _calibrate(k, v) for k, v in raw_scores.items()}
 
-        composite = sum(WEIGHTS_B[k] * scores[k] for k in WEIGHTS_B)
+        weights   = _get_weights()
+        composite = sum(weights[k] * scores[k] for k in weights)
         return round(composite, 2), False
 
     # Batch eval: run all judges including both correctness
@@ -519,13 +522,11 @@ Return ONLY valid JSON:
         )
         result.did_abstain = self.check_did_abstain(answer)
 
-        # Always run judges 3/4/5 regardless of abstention
-        # composite will still be 0 if abstained, but sub-scores preserved
-        result.faithfulness  = self.judge_faithfulness(question, contexts, answer)
-        result.correctness_a = self.judge_correctness_reference(
+        result.faithfulness   = self.judge_faithfulness(question, contexts, answer)
+        result.correctness_a  = self.judge_correctness_reference(
             question, answer, expected_answer
         )
-        result.correctness_b = self.judge_correctness_rag_proxy(
+        result.correctness_b  = self.judge_correctness_rag_proxy(
             question, answer, contexts
         )
         result.answer_quality = self.judge_answer_quality(question, answer)
@@ -551,8 +552,6 @@ Return ONLY valid JSON:
         )
         result.did_abstain = self.check_did_abstain(answer)
 
-        # Run judges 3/4/5 regardless of abstention
-        # composite will be 0 if abstained, but sub-scores preserved
         result.faithfulness  = self.judge_faithfulness(question, contexts, answer)
         result.correctness_b = self.judge_correctness_rag_proxy(
             question, answer, contexts
@@ -568,7 +567,7 @@ Return ONLY valid JSON:
 
 # Helpers
 def load_questions_from_sheet(ws) -> List[dict]:
-    headers = [cell.value for cell in ws[1]]
+    headers   = [cell.value for cell in ws[1]]
     questions = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not any(row):
@@ -631,13 +630,12 @@ def run_evaluation(
     sheet_names: Optional[List[str]] = None,
     output_dir: str = OUTPUT_DIR,
 ):
-    # Avoid circular import
     from agent import AgenticRAGEngine
     import openpyxl
 
     os.makedirs(output_dir, exist_ok=True)
 
-    wb = openpyxl.load_workbook(EXCEL_FILE)
+    wb         = openpyxl.load_workbook(EXCEL_FILE)
     all_sheets = wb.sheetnames[1:] if SKIP_FIRST_SHEET else wb.sheetnames
     if sheet_names:
         all_sheets = [s for s in all_sheets if s in sheet_names]
@@ -646,7 +644,7 @@ def run_evaluation(
 
     print("Initializing RAG agent...")
     agent = AgenticRAGEngine(config=default_config, enable_judge=False)
-    judge = LLMJudgeV3()   # no calibrator for batch eval
+    judge = LLMJudgeV3()
     print("Agent ready.\n")
 
     total_done = total_skip = total_error = 0
@@ -713,7 +711,6 @@ def run_evaluation(
                     "correctness_a_score":      result.correctness_a.score,
                     "correctness_b_score":      result.correctness_b.score,
                     "answer_quality_score":     result.answer_quality.score,
-                    "calibrated_composite_score": -1,
                 })
                 f.flush()
                 total_done += 1
@@ -734,12 +731,12 @@ def evaluate_single_query(
     contexts: List[str],
 ) -> Dict[str, Any]:
     """
-    Chatbot evaluation — Mode B only, with calibration if available.
+    Chatbot evaluation — Mode B only, with Isotonic calibration.
     Returns dict for response.metadata["judge_evaluations"].
+    Requires calibration/calibration_map.json and calibration/weights.json to exist.
     """
-    calibrator = load_calibrator(CALIBRATION_DIR)
-    judge      = LLMJudgeV3(calibrator=calibrator)
-    result     = judge.evaluate_chatbot(
+    judge  = _get_judge()
+    result = judge.evaluate_chatbot(
         question=question, answer=answer, contexts=contexts
     )
 

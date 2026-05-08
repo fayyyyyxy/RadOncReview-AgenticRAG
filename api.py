@@ -52,7 +52,6 @@ class QueryResponse(BaseModel):
     """Response model for query endpoint."""
     query: str
     answer: str
-    confidence_score: float = Field(ge=0.0, le=1.0)
     citations: List[CitationResponse] = []
     reasoning_trace: Optional[List[str]] = None
     metadata: Dict[str, Any] = {}
@@ -173,7 +172,6 @@ async def query_guidelines(
         return QueryResponse(
             query=response.query,
             answer=response.answer,
-            confidence_score=response.confidence_score,
             citations=citations,
             reasoning_trace=response.reasoning_trace if request.include_reasoning else None,
             metadata=response.metadata,

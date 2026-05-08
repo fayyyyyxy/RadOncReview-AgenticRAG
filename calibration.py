@@ -1,195 +1,216 @@
 """
-calibration.py — Isotonic Regression Calibration
-=================================================
-Takes ONE input CSV with both raw judge scores and human annotator scores, fits isotonic regression per criteria,
-outputs calibration CSVs.
+Run once after collecting human evaluation labels.
+Must be run before starting llm_judge_v3.py.
 
-Input CSV — one row per annotated question (columns for human evaluation may be reduced if can't be assessed):
-  question
-  faithfulness_score          ← raw judge score (from llm_judge_v3 CSV)
-  correctness_score
-  answer_quality_score
-  retrieval_adequacy_score
-  human_faithfulness          ← human annotator score (1-5)
-  human_correctness
-  human_answer_quality
-  human_retrieval_adequacy
+Steps:
+  1. Read Excel (all disease-site sheets)
+  2. Fit Isotonic Regression for correctness_b and answer_quality vs human scores
+  3. Add calibrated columns to combined_eval.csv
+  4. Output calibration_map.json
+  5. Compute Spearman rho (calibrated scores + raw faithfulness/retrieval vs Human correctness) → output weights.json
 
-Output: calibration/ folder with one CSV per criteria:
-  calibration/faithfulness.csv
-  ...
+Outputs
+-------
+  calibration/calibration_map.json  per-criteria lookup table {score: calibrated_value}
+  calibration/weights.json          normalized Spearman weights
+  calibration/combined_eval.csv     all rows with raw + calibrated
 
-Each output CSV example (5 rows):
-  raw_score,calibrated_score
-  1,1.0
-  2,2.1
-  3,2.8
-  4,3.4
-  5,4.3
+Usage
+-----
+  python calibration.py --excel xxxxx.xlsx
 """
 
-import csv
-import os
 import argparse
-from typing import List, Dict, Tuple
+import csv
+import json
+import os
+import sys
+import numpy as np
+import openpyxl
+from scipy import stats
+from sklearn.isotonic import IsotonicRegression
 
 
-CRITERIA = {
-    "faithfulness":       ("faithfulness_score",      "human_faithfulness"),
-    "correctness":        ("correctness_score",        "human_correctness"),
-    "answer_quality":     ("answer_quality_score",     "human_answer_quality"),
-    "retrieval_adequacy": ("retrieval_adequacy_score", "human_retrieval_adequacy"),
+EXCEL_COLUMNS = {
+    "disease_site":     "Disease Site",
+    "corr_b_raw":       "correctness b (rag proxy)",
+    "quality_raw":      "answer_quality_score(completeness)",
+    "faithfulness_raw": "faithfulness_score",
+    "retrieval_raw":    "retrieval_adequacy_score",
+    "human_corr":       "Correctness_Kishan",
+    "human_qual":       "Answer Quality_Kishan",
 }
 
-
-# Isotonic regression
-def isotonic_regression(
-    x: List[float], y: List[float]
-) -> List[Tuple[float, float]]:
-    """
-    Pool Adjacent Violators algorithm.
-    Fits a monotone non-decreasing mapping from x to y.
-    Returns sorted list of (x_val, calibrated_y_val) pairs.
-    """
-    pairs  = sorted(zip(x, y), key=lambda p: p[0])
-    xs     = [p[0] for p in pairs]
-    ys     = [p[1] for p in pairs]
-
-    blocks = [[ys[i], 1, [xs[i]]] for i in range(len(ys))]
-
-    changed = True
-    while changed:
-        changed    = False
-        new_blocks = []
-        i          = 0
-        while i < len(blocks):
-            if i + 1 < len(blocks):
-                mean_i    = blocks[i][0]   / blocks[i][1]
-                mean_next = blocks[i+1][0] / blocks[i+1][1]
-                if mean_i > mean_next:
-                    merged = [
-                        blocks[i][0]   + blocks[i+1][0],
-                        blocks[i][1]   + blocks[i+1][1],
-                        blocks[i][2]   + blocks[i+1][2],
-                    ]
-                    new_blocks.append(merged)
-                    i      += 2
-                    changed = True
-                    continue
-            new_blocks.append(blocks[i])
-            i += 1
-        blocks = new_blocks
-
-    result = []
-    for block in blocks:
-        mean = block[0] / block[1]
-        for x_val in block[2]:
-            result.append((x_val, mean))
-
-    return sorted(result, key=lambda p: p[0])
+SKIP_SHEETS = {"Summary + Legend", "Kishan Evaluation Summary"}
 
 
-def fit_calibration_map(
-    raw_scores: List[int], human_scores: List[float]
-) -> Dict[int, float]:
-    """
-    Groups by integer raw score (1-5), computes mean human score per group,
-    runs isotonic regression to ensure monotonicity.
-    Returns {1: cal, 2: cal, 3: cal, 4: cal, 5: cal}.
-    """
-    groups: Dict[int, List[float]] = {1: [], 2: [], 3: [], 4: [], 5: []}
-    for raw, human in zip(raw_scores, human_scores):
-        key = max(1, min(5, int(raw)))
-        groups[key].append(float(human))
-
-    means_x, means_y = [], []
-    for score in range(1, 6):
-        if groups[score]:
-            means_x.append(float(score))
-            means_y.append(sum(groups[score]) / len(groups[score]))
-
-    if len(means_x) < 2:
-        return {s: float(s) for s in range(1, 6)}
-
-    iso_pairs = isotonic_regression(means_x, means_y)
-    iso_map   = {int(round(p[0])): round(p[1], 4) for p in iso_pairs}
-
-    # Fill any missing integer scores
-    full_map = {}
-    for score in range(1, 6):
-        if score in iso_map:
-            full_map[score] = iso_map[score]
-        else:
-            nearest         = min(iso_map.keys(), key=lambda k: abs(k - score))
-            full_map[score] = iso_map[nearest]
-
-    return full_map
-
-
-def run_calibration(input_csv: str, output_dir: str):
-
-    if not os.path.exists(input_csv):
-        print(f"ERROR: Input file not found: {input_csv}")
-        return
-
-    with open(input_csv, "r", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    print(f"Loaded {len(rows)} rows from {input_csv}\n")
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    for criteria, (raw_col, human_col) in CRITERIA.items():
-
-        raw_scores   = []
-        human_scores = []
-        for row in rows:
-            raw   = row.get(raw_col, "").strip()
-            human = row.get(human_col, "").strip()
-            if raw and human:
-                try:
-                    raw_scores.append(int(float(raw)))
-                    human_scores.append(float(human))
-                except ValueError:
-                    continue
-
-        n = len(raw_scores)
-        print(f"{'='*50}")
-        print(f"Criteria: {criteria} ({n} labeled examples)")
-
-        if n < 5:
-            print(f"  WARNING: Only {n} examples — need at least 5. Skipping.\n")
+def read_excel(excel_path: str) -> list:
+    wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
+    rows = []
+    for sheet_name in wb.sheetnames:
+        if sheet_name in SKIP_SHEETS:
             continue
-
-        mapping  = fit_calibration_map(raw_scores, human_scores)
-
-        out_path = os.path.join(output_dir, f"{criteria}.csv")
-        with open(out_path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["raw_score", "calibrated_score"])
-            writer.writeheader()
-            for score in sorted(mapping.keys()):
-                writer.writerow({
-                    "raw_score":        score,
-                    "calibrated_score": mapping[score],
-                })
-
-        print(f"  Mapping (raw → calibrated):")
-        for score in sorted(mapping.keys()):
-            bar = "█" * round(mapping[score]) + "░" * (5 - round(mapping[score]))
-            print(f"    {score} → {mapping[score]:.2f}  [{bar}]")
-        print(f"  Saved: {out_path}\n")
-
-    print(f"Calibration complete.")
-    print(f"CSVs written to: {os.path.abspath(output_dir)}/")
-    print(f"Place this folder next to llm_judge_v3.py to enable calibration.")
+        ws = wb[sheet_name]
+        headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not any(row):
+                continue
+            record = dict(zip(headers, row))
+            mapped = {"sheet": sheet_name}
+            for canonical, excel_col in EXCEL_COLUMNS.items():
+                mapped[canonical] = record.get(excel_col)
+            rows.append(mapped)
+    wb.close()
+    print(f"  Read {len(rows)} rows from {len(wb.sheetnames) - len(SKIP_SHEETS)} sheets")
+    return rows
 
 
-# CLI
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Isotonic regression calibration")
-    parser.add_argument("--input",      required=True,
-                        help="Path to human_labels.csv")
-    parser.add_argument("--output_dir", default="calibration",
-                        help="Output directory (default: calibration/)")
+def fit_isotonic(x_vals, y_vals) -> dict:
+    """
+    Fit isotonic regression and return a lookup table {raw_score: calibrated_value}
+    for integer scores 1-5.
+    Isotonic guarantees monotone mapping: higher raw score → higher calibrated score.
+    """
+    X = np.array(x_vals)
+    Y = np.array(y_vals)
+    ir = IsotonicRegression(out_of_bounds="clip").fit(X, Y)
+    # Build lookup table for integer scores 1-5
+    lookup = {}
+    for score in range(1, 6):
+        lookup[str(score)] = round(float(ir.predict([score])[0]), 4)
+    return lookup
+
+
+def apply_isotonic(raw_score, lookup: dict) -> float:
+    key = str(int(raw_score))
+    return float(lookup.get(key, raw_score))
+
+
+def compute_weights(rows, calibration_map):
+    valid = [
+        r for r in rows
+        if all(r[k] is not None for k in
+               ["human_corr", "corr_b_raw", "quality_raw",
+                "faithfulness_raw", "retrieval_raw"])
+    ]
+    human = np.array([float(r["human_corr"]) for r in valid])
+
+    criteria_vals = {
+        "retrieval_adequacy": np.array([float(r["retrieval_raw"])    for r in valid]),
+        "faithfulness":       np.array([float(r["faithfulness_raw"]) for r in valid]),
+        "correctness":        np.array([
+            apply_isotonic(float(r["corr_b_raw"]), calibration_map["correctness"])
+            for r in valid
+        ]),
+        "answer_quality":     np.array([
+            apply_isotonic(float(r["quality_raw"]), calibration_map["answer_quality"])
+            for r in valid
+        ]),
+    }
+
+    rhos = {}
+    for name, vals in criteria_vals.items():
+        rho, _ = stats.spearmanr(vals, human)
+        rhos[name] = abs(rho)
+        print(f"    rho({name:<20} vs Human correctness) = {rho:.4f}")
+
+    total = sum(rhos.values())
+    weights = {k: round(v / total, 4) for k, v in rhos.items()}
+    # Ensure exact sum = 1.0
+    diff = round(1.0 - sum(weights.values()), 4)
+    weights[max(weights, key=weights.get)] = round(
+        weights[max(weights, key=weights.get)] + diff, 4
+    )
+    return weights
+
+
+def write_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"    Wrote {path}")
+
+
+def write_combined_csv(output_dir, rows, calibration_map):
+    path = os.path.join(output_dir, "combined_eval.csv")
+    fieldnames = [
+        "sheet", "disease_site",
+        "corr_b_raw", "corr_b_calibrated",
+        "quality_raw", "quality_calibrated",
+        "faithfulness_raw", "retrieval_raw",
+        "human_corr", "human_qual",
+    ]
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            row_out = {
+                "sheet":            r["sheet"],
+                "disease_site":     r["disease_site"],
+                "corr_b_raw":       r["corr_b_raw"],
+                "quality_raw":      r["quality_raw"],
+                "faithfulness_raw": r["faithfulness_raw"],
+                "retrieval_raw":    r["retrieval_raw"],
+                "human_corr":       r["human_corr"],
+                "human_qual":       r["human_qual"],
+            }
+            for crit, raw_key, cal_key in [
+                ("correctness",    "corr_b_raw",  "corr_b_calibrated"),
+                ("answer_quality", "quality_raw", "quality_calibrated"),
+            ]:
+                raw = r.get(raw_key)
+                try:
+                    row_out[cal_key] = apply_isotonic(
+                        float(raw), calibration_map[crit]
+                    )
+                except (TypeError, ValueError):
+                    row_out[cal_key] = ""
+            writer.writerow(row_out)
+    print(f"    Wrote {path}  ({len(rows)} rows)")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--excel",      required=True)
+    parser.add_argument("--output_dir", default="calibration")
     args = parser.parse_args()
 
-    run_calibration(input_csv=args.input, output_dir=args.output_dir)
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    print("\n── Step 1: Read Excel ────────────────────────────────")
+    rows = read_excel(args.excel)
+
+    print("\n── Step 2: Fit Isotonic Regression ───────────────────")
+    calibration_map = {}
+    for crit, raw_key, human_key in [
+        ("correctness",    "corr_b_raw",  "human_corr"),
+        ("answer_quality", "quality_raw", "human_qual"),
+    ]:
+        paired = [
+            (float(r[raw_key]), float(r[human_key]))
+            for r in rows
+            if r[raw_key] is not None and r[human_key] is not None
+        ]
+        if len(paired) < 5:
+            print(f"  ERROR: {crit} only {len(paired)} labeled rows — need at least 5")
+            sys.exit(1)
+        xs, ys = zip(*paired)
+        lookup = fit_isotonic(list(xs), list(ys))
+        calibration_map[crit] = lookup
+        print(f"  {crit:<20} n={len(paired)}  lookup={lookup}")
+
+    print("\n── Step 3: Spearman weights ──────────────────────────")
+    weights = compute_weights(rows, calibration_map)
+    print(f"\n  Final weights:")
+    for k, v in weights.items():
+        print(f"    {k:<20} {v:.4f}")
+
+    print("\n── Step 4: Write outputs ─────────────────────────────")
+    write_json(os.path.join(args.output_dir, "calibration_map.json"), calibration_map)
+    write_json(os.path.join(args.output_dir, "weights.json"), weights)
+    write_combined_csv(args.output_dir, rows, calibration_map)
+
+    print("── Done ──────────────────────────────────────────────")
+
+
+if __name__ == "__main__":
+    main()
