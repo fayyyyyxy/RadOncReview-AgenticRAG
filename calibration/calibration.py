@@ -1,6 +1,6 @@
 """
 Run once after collecting human evaluation labels.
-Must be run before starting llm_judge_v3.py.
+Must be run before starting evaluation/llm_judge_v3.py.
 
 Steps:
   1. Read Excel (all disease-site sheets)
@@ -17,7 +17,7 @@ Outputs
 
 Usage
 -----
-  python calibration.py --excel xxxxx.xlsx
+  python calibration/calibration.py --excel xxxxx.xlsx
 """
 
 import argparse

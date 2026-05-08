@@ -15,7 +15,7 @@ import hmac
 import os
 from pathlib import Path
 
-from agent import AgenticRAGEngine, create_agent
+from core.agent import AgenticRAGEngine, create_agent
 from config import Config, default_config
 
 

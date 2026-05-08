@@ -76,7 +76,7 @@ class TaskPlan:
     created_at: datetime = field(default_factory=datetime.now)
 
 
-@dataclass 
+@dataclass
 class RetrievedChunk:
     """A retrieved document chunk."""
     faiss_id: int
@@ -102,8 +102,8 @@ class Citation:
     relevance_score: float
     faiss_id: int
     source_url: Optional[str] = None        # source url
-    document_title: Optional[str] = None    # 
-    source_type: str = "review_notes"       # 
+    document_title: Optional[str] = None    #
+    source_type: str = "review_notes"       #
 
 
 @dataclass

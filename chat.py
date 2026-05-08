@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent import create_agent
+from core.agent import create_agent
 
 
 def main():

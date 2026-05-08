@@ -5,14 +5,14 @@ Identifies intent, entities, disease categories, and treatment modalities.
 import re
 from typing import Optional, List, Tuple
 
-from models import QueryAnalysis, QueryIntent
-from llm_client import BaseLLMClient
+from .models import QueryAnalysis, QueryIntent
+from .llm_client import BaseLLMClient
 from config import AgentConfig, Config
 
 
 class QueryAnalyzer:
     """Analyzes and classifies radiation oncology queries."""
-    
+
     # Intent keyword patterns
     INTENT_PATTERNS = {
         QueryIntent.DOSE_FRACTIONATION: [
@@ -20,7 +20,7 @@ class QueryAnalyzer:
             r'\bhypofractionat', r'\bconventional\s+fraction', r'\bBED\b', r'\bEQD2\b'
         ],
         QueryIntent.TREATMENT_PROTOCOL: [
-            r'\bprotocol\b', r'\bguideline\b', r'\btreatment\s+plan', 
+            r'\bprotocol\b', r'\bguideline\b', r'\btreatment\s+plan',
             r'\bstandard\s+of\s+care', r'\bregimen\b', r'\bapproach\b'
         ],
         QueryIntent.SIDE_EFFECTS: [
@@ -46,7 +46,7 @@ class QueryAnalyzer:
             r'\bwhat\s+is\b', r'\bdefine\b', r'\bmeaning\s+of', r'\bexplain\b'
         ]
     }
-    
+
     # Disease category patterns
     DISEASE_PATTERNS = {
         "BrainMets": [r'\bbrain metastas', r'\bbrain mets\b', r'\bCNS metastas'],
@@ -65,7 +65,6 @@ class QueryAnalyzer:
         "Thorax": [r'\blung\b', r'\bNSCLC\b', r'\bSCLC\b', r'\bmesothelioma\b', r'\bthymoma\b']
     }
 
-    
     # Treatment modality patterns
     MODALITY_PATTERNS = {
         "EBRT": [r'\bEBRT\b', r'\bexternal\s+beam\b'],
@@ -81,7 +80,6 @@ class QueryAnalyzer:
     }
 
     # Patterns that suggest user wants published trial data
-    # Used to populate needs_trial_evidence flag (informational, not used for routing)
     TRIAL_EVIDENCE_PATTERNS = [
         r'\btrial\b', r'\bRCT\b', r'\brandomized\b',
         r'\bphase [123]\b', r'\bNEJM\b', r'\bJCO\b', r'\bLancet\b',
@@ -90,7 +88,7 @@ class QueryAnalyzer:
         r'\bGerman rectal\b', r'\bCROSS\b', r'\bRTOG\b', r'\bEORTC\b',
         r'\bpublished\b', r'\bevidence\b',
     ]
-    
+
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
@@ -99,7 +97,7 @@ class QueryAnalyzer:
         """Return True if query is asking about trial results or published evidence."""
         query_lower = query.lower()
         return any(re.search(p, query_lower) for p in self.TRIAL_EVIDENCE_PATTERNS)
-    
+
     def _match_patterns(self, text: str, patterns: dict) -> Optional[str]:
         """Match text against a dictionary of regex patterns."""
         text_lower = text.lower()
@@ -108,57 +106,57 @@ class QueryAnalyzer:
                 if re.search(pattern, text_lower, re.IGNORECASE):
                     return category
         return None
-    
+
     def _extract_entities(self, text: str) -> List[str]:
         """Extract key medical entities from the query."""
         entities = []
-        
+
         # Extract dose values (e.g., "50 Gy", "2 Gy/fx")
         dose_pattern = r'\b\d+\.?\d*\s*(Gy|cGy|Gy/fx|fx)\b'
         entities.extend(re.findall(dose_pattern, text, re.IGNORECASE))
-        
+
         # Extract staging (e.g., "T2N1M0", "Stage IIIA")
         stage_pattern = r'\b(T[0-4][a-c]?N[0-3][a-c]?M[0-1]|Stage\s+[IVX]+[A-C]?)\b'
         entities.extend(re.findall(stage_pattern, text, re.IGNORECASE))
-        
+
         # Extract anatomical structures
         anatomy_pattern = r'\b(lymph\s+node|chest\s+wall|supraclavicular|axilla|internal\s+mammary|mediastin)\b'
         entities.extend(re.findall(anatomy_pattern, text, re.IGNORECASE))
-        
+
         return list(set(entities))
-    
+
     def _detect_complexity(self, text: str, intent: QueryIntent) -> bool:
         """Determine if the query requires multi-step reasoning."""
         # Multi-part questions
         if ' and ' in text.lower() and '?' in text:
             return True
-        
+
         # Comparison queries often need multiple retrievals
         if intent == QueryIntent.COMPARISON:
             return True
-        
+
         # Questions with multiple conditions
         condition_words = ['if', 'when', 'given', 'assuming', 'in case of']
         if any(word in text.lower() for word in condition_words):
             return True
-        
+
         # Long queries tend to be more complex
         if len(text.split()) > 30:
             return True
-        
+
         return False
-    
+
     def analyze(self, query: str) -> QueryAnalysis:
         """Perform rule-based query analysis."""
         # Detect intent - check comparison FIRST (higher priority)
         intent = QueryIntent.GENERAL
-        
+
         # Check comparison patterns first (they often contain dose/treatment terms too)
         for pattern in self.INTENT_PATTERNS[QueryIntent.COMPARISON]:
             if re.search(pattern, query, re.IGNORECASE):
                 intent = QueryIntent.COMPARISON
                 break
-        
+
         # If not comparison, check other intents
         if intent == QueryIntent.GENERAL:
             for intent_type, patterns in self.INTENT_PATTERNS.items():
@@ -170,19 +168,19 @@ class QueryAnalyzer:
                         break
                 if intent != QueryIntent.GENERAL:
                     break
-        
+
         # Detect disease category
         disease_category = self._match_patterns(query, self.DISEASE_PATTERNS)
-        
+
         # Detect treatment modality
         treatment_modality = self._match_patterns(query, self.MODALITY_PATTERNS)
-        
+
         # Extract entities
         entities = self._extract_entities(query)
-        
+
         # Detect complexity
         is_complex = self._detect_complexity(query, intent)
-        
+
         # Rule-based confidence
         confidence = 0.7
         if disease_category:
@@ -204,17 +202,17 @@ class QueryAnalyzer:
             confidence=min(confidence, 1.0),
             needs_trial_evidence=needs_trial_evidence
         )
-    
+
     def analyze_with_llm(self, query: str) -> QueryAnalysis:
         """Use LLM for more sophisticated query analysis."""
         # First do rule-based analysis
         rule_based = self.analyze(query)
-        
+
         # Use LLM to enhance understanding
-        system_prompt = """You are a radiation oncology clinical query analyzer. 
+        system_prompt = """You are a radiation oncology clinical query analyzer.
 Analyze the user's question and extract structured information.
 Be precise and use standard medical terminology."""
-        
+
         analysis_prompt = f"""Analyze this radiation oncology query:
 "{query}"
 
@@ -228,14 +226,14 @@ Extract the following information in JSON format:
     "is_complex": <true if requires multi-step reasoning, false otherwise>,
     "reasoning": "<brief explanation of your analysis>"
 }}"""
-        
+
         try:
             result = self.llm.generate_structured(
                 analysis_prompt,
                 output_schema={
                     "intent": "string",
                     "disease_category": "string or null",
-                    "treatment_modality": "string or null", 
+                    "treatment_modality": "string or null",
                     "key_entities": "array of strings",
                     "temporal_context": "string or null",
                     "is_complex": "boolean",
@@ -243,7 +241,7 @@ Extract the following information in JSON format:
                 },
                 system_prompt=system_prompt
             )
-            
+
             if "error" not in result:
                 # Map string intent to enum
                 intent_map = {
@@ -257,7 +255,7 @@ Extract the following information in JSON format:
                     "definition": QueryIntent.DEFINITION,
                     "general": QueryIntent.GENERAL
                 }
-                
+
                 return QueryAnalysis(
                     original_query=query,
                     intent=intent_map.get(result.get("intent", "general"), QueryIntent.GENERAL),
@@ -271,5 +269,5 @@ Extract the following information in JSON format:
                 )
         except Exception as e:
             print(f"LLM analysis failed, falling back to rule-based: {e}")
-        
+
         return rule_based

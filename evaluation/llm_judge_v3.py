@@ -23,7 +23,7 @@ Chatbot (evaluate_single_query):
   Computes composite score
 
 Calibration:
-  Run calibration.py first to generate:
+  Run calibration/calibration.py first to generate:
     calibration/calibration_map.json  — per-criteria lookup table
     calibration/weights.json          — normalized Spearman weights
   llm_judge_v3 will raise FileNotFoundError if these are missing.
@@ -40,16 +40,17 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import boto3
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import default_config, create_boto3_session
 
+
+_PROJECT_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 EXCEL_FILE       = "KP_test_questions_REVISED.xlsx"
 OUTPUT_DIR       = "eval_results"
 SKIP_FIRST_SHEET = True
 JUDGE_MODEL_ID   = "us.amazon.nova-pro-v1:0"
 DELAY_BETWEEN_Q  = 2.0
-CALIBRATION_DIR  = "calibration"
+CALIBRATION_DIR  = os.path.join(_PROJECT_ROOT, "calibration")
 
 ABSTENTION_PHRASES = [
     "i don't have", "i cannot find", "not enough information",
@@ -75,13 +76,13 @@ CSV_COLUMNS = [
 def _load_calibration(cal_dir: str = CALIBRATION_DIR) -> tuple:
     """
     Load calibration_map.json and weights.json from calibration/.
-    Raises FileNotFoundError if either file is missing — run calibration.py first.
+    Raises FileNotFoundError if either file is missing — run calibration/calibration.py first.
     """
     for fname in ["calibration_map.json", "weights.json"]:
         path = os.path.join(cal_dir, fname)
         if not os.path.exists(path):
             raise FileNotFoundError(
-                f"Missing {path} — run calibration.py first"
+                f"Missing {path} — run calibration/calibration.py first"
             )
     with open(os.path.join(cal_dir, "calibration_map.json")) as f:
         calibration_map = json.load(f)
@@ -630,7 +631,7 @@ def run_evaluation(
     sheet_names: Optional[List[str]] = None,
     output_dir: str = OUTPUT_DIR,
 ):
-    from agent import AgenticRAGEngine
+    from core.agent import AgenticRAGEngine
     import openpyxl
 
     os.makedirs(output_dir, exist_ok=True)
@@ -724,7 +725,7 @@ def run_evaluation(
     print(f"{'='*60}\n")
 
 
-# evaluate_single_query: called from agent.py
+# evaluate_single_query: called from core/agent.py
 def evaluate_single_query(
     question: str,
     answer: str,

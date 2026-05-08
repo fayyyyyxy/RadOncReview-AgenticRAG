@@ -6,11 +6,11 @@ import uuid
 from typing import List, Optional
 from datetime import datetime
 
-from models import (
+from .models import (
     QueryAnalysis, TaskPlan, SubTask, TaskStatus,
     RetrievalStrategy, QueryIntent
 )
-from llm_client import BaseLLMClient
+from .llm_client import BaseLLMClient
 from config import Config
 
 
@@ -33,11 +33,11 @@ class TaskPlanner:
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
-    
+
     def _create_task_id(self) -> str:
         """Generate a unique task ID."""
         return f"task_{uuid.uuid4().hex[:8]}"
-    
+
     def _create_plan_id(self) -> str:
         """Generate a unique plan ID."""
         return f"plan_{uuid.uuid4().hex[:8]}"
@@ -162,7 +162,6 @@ Remember: Generate the optimal number of tasks (2-3) that comprehensively cover 
             if "error" not in result and "sub_tasks" in result:
                 sub_tasks = []
                 tasks_to_process = result["sub_tasks"][:3]  # cap at 3 subtopics
-                num_tasks = len(tasks_to_process)
 
                 for i, task in enumerate(tasks_to_process):
                     subtopic_query = task.get("query", analysis.original_query)

@@ -20,7 +20,7 @@ from typing import List, Optional
 import boto3
 import openpyxl
 from config import default_config, create_boto3_session
-from agent import AgenticRAGEngine
+from core.agent import AgenticRAGEngine
 
 
 EXCEL_FILE      = "KP_test_questions_REVISED.xlsx"

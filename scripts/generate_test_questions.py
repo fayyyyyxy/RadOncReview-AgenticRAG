@@ -9,20 +9,25 @@ Logic:
   Output: test_questions.csv
 """
 
+import sys
+import os
+
+# Add project root to path when running this script directly
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import boto3
 import json
 import csv
 import time
 import re
-import os
 from config import default_config, create_boto3_session
 
 
 AWS_PROFILE   = default_config.aws.profile_name
-AWS_REGION    = default_config.aws.region 
+AWS_REGION    = default_config.aws.region
 S3_BUCKET     = default_config.aws.s3_bucket
-KB_ID         = default_config.aws.knowledge_base_id 
-DS_ID         = default_config.aws.knowledge_base_datasource_id 
+KB_ID         = default_config.aws.knowledge_base_id
+DS_ID         = default_config.aws.knowledge_base_datasource_id
 S3_PREFIX     = "reading-lists/"
 NOVA_MODEL_ID = "us.amazon.nova-pro-v1:0"
 OUTPUT_CSV    = "test_questions.csv"
@@ -336,7 +341,7 @@ def main():
                 csvfile.flush()
                 # Small delay to avoid Bedrock throttling
                 time.sleep(0.5)
-            
+
     print(f"✓ Generated {total_questions} questions → {os.path.abspath(OUTPUT_CSV)}")
 
 if __name__ == "__main__":

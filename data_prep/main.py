@@ -1,5 +1,7 @@
 import os
+import sys
 import subprocess
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from extract_doc_json import extract_json
 from clean_json import extract_hierarchical_sections
 from s3_store_load import create_s3_bucket, upload_json_to_s3, upload_file_to_s3, load_from_s3

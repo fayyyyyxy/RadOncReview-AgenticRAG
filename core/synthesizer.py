@@ -4,18 +4,18 @@ Response Synthesizer: Generates answers from retrieved chunks with citations.
 from typing import List, Dict, Optional
 import re
 
-from models import (
+from .models import (
     RetrievedChunk, Citation, AgentResponse, TaskPlan,
     SelfCritiqueResult, QueryAnalysis
 )
-from llm_client import BaseLLMClient
+from .llm_client import BaseLLMClient
 from config import AgentConfig, Config
 
 
 class ResponseSynthesizer:
     """Synthesizes final answers from retrieved information."""
-    
-    SYSTEM_PROMPT = """You are a radiation oncology clinical assistant. 
+
+    SYSTEM_PROMPT = """You are a radiation oncology clinical assistant.
 Your role is to provide accurate, guideline-based answers to clinical questions.
 
 Guidelines for your responses:
@@ -32,12 +32,12 @@ Guidelines for your responses:
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
-    
+
     def _format_context(self, chunks: List[Dict]) -> tuple[str, List[Citation]]:
         """Format retrieved chunks into context string and citation list."""
         context_parts = []
         citations = []
-        
+
         for i, chunk in enumerate(chunks):
             citation_id = i + 1
             text = chunk.get("text", "")
@@ -49,10 +49,10 @@ Guidelines for your responses:
                 doc_title if source_type == "clinical_trial" and doc_title
                 else chunk.get("path", "Unknown source")
             )
-            
+
             # Add to context
             context_parts.append(f"[{citation_id}] Source: {path}\n{text}\n")
-            
+
             # Create citation object
             citations.append(Citation(
                 citation_id=citation_id,
@@ -60,20 +60,20 @@ Guidelines for your responses:
                 chunk_text=text[:500],  # Truncate for storage
                 relevance_score=float(score) if score else 0.0,
                 faiss_id=chunk.get("faiss_id", -1),
-                source_url=chunk.get("s3_location", ""),            # 
-                document_title=chunk.get("document_title", ""),     # 
-                source_type=source_type   
+                source_url=chunk.get("s3_location", ""),
+                document_title=chunk.get("document_title", ""),
+                source_type=source_type
             ))
-        
+
         context = "\n---\n".join(context_parts)
         return context, citations
-    
+
     def _extract_citations_used(self, answer: str) -> List[int]:
         """Extract citation numbers used in the answer."""
         pattern = r'\[(\d+)\]'
         matches = re.findall(pattern, answer)
         return list(set(int(m) for m in matches))
-    
+
     def synthesize(
         self,
         query: str,
@@ -82,7 +82,7 @@ Guidelines for your responses:
         all_chunks: List[Dict]
     ) -> tuple[str, List[Citation], float]:
         """Synthesize an answer from retrieved chunks."""
-        
+
         if not all_chunks:
             return (
                 "I could not find relevant information in the knowledge base to answer "
@@ -90,10 +90,10 @@ Guidelines for your responses:
                 [],
                 0.0
             )
-        
+
         # Format context and prepare citations
         context, all_citations = self._format_context(all_chunks)
-        
+
         # Build synthesis prompt
         synthesis_prompt = f"""Based on the following retrieved information, answer the clinical question.
 
@@ -116,14 +116,14 @@ Instructions:
 7. Highlight any important safety considerations
 
 Answer:"""
-        
+
         # Generate response
         answer = self.llm.generate(synthesis_prompt, self.SYSTEM_PROMPT)
-        
+
         # Identify which citations were actually used
         citations_used = self._extract_citations_used(answer)
         used_citations = [c for c in all_citations if c.citation_id in citations_used]
-        
+
         # Calculate confidence based on citation coverage and scores
         if used_citations:
             avg_score = sum(c.relevance_score for c in used_citations) / len(used_citations)
@@ -131,9 +131,9 @@ Answer:"""
             confidence = (avg_score * 0.7) + (coverage * 0.3)
         else:
             confidence = 0.3  # Low confidence if no citations
-        
+
         return answer, used_citations, confidence
-    
+
     def synthesize_multi_topic(
         self,
         query: str,
@@ -141,23 +141,23 @@ Answer:"""
         chunks_by_topic: Dict[str, List[Dict]]
     ) -> tuple[str, List[Citation], float]:
         """Synthesize an answer from multiple retrieval results."""
-        
+
         # Format context for each topic
         context_parts = []
         all_citations = []
         citation_counter = 1
-        
+
         for topic, chunks in chunks_by_topic.items():
             topic_context, topic_citations = self._format_context(chunks)
-            
+
             # Renumber citations
             for citation in topic_citations:
                 citation.citation_id = citation_counter
                 citation_counter += 1
-            
+
             context_parts.append(f"### {topic} ###\n{topic_context}")
             all_citations.extend(topic_citations)
-        
+
         full_context = "\n\n".join(context_parts)
 
         synthesis_prompt = f"""
@@ -180,32 +180,31 @@ Answer:"""
 
         Answer:
         """
-        
-        
+
         answer = self.llm.generate(synthesis_prompt, self.SYSTEM_PROMPT)
-        
+
         # Calculate confidence
         citations_used = self._extract_citations_used(answer)
         used_citations = [c for c in all_citations if c.citation_id in citations_used]
-        
+
         if used_citations:
             confidence = sum(c.relevance_score for c in used_citations) / len(used_citations)
         else:
             confidence = 0.3
-        
+
         return answer, used_citations, confidence
 
 
 class SelfCritic:
     """Evaluates generated answers for completeness, accuracy, and safety."""
-    
-    CRITIQUE_PROMPT = """You are a radiation oncology expert reviewer. 
+
+    CRITIQUE_PROMPT = """You are a radiation oncology expert reviewer.
 Evaluate the following answer for completeness, accuracy, and safety."""
-    
+
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
-    
+
     def critique(
         self,
         query: str,
@@ -214,13 +213,13 @@ Evaluate the following answer for completeness, accuracy, and safety."""
         analysis: QueryAnalysis
     ) -> SelfCritiqueResult:
         """Perform self-critique on the generated answer."""
-        
+
         # Format citations for review
         citation_text = "\n".join([
             f"[{c.citation_id}] {c.source_path}: {c.chunk_text[:200]}..."
             for c in citations
         ])
-        
+
         critique_prompt = f"""Evaluate this radiation oncology answer:
 
 Question: {query}
@@ -242,13 +241,13 @@ Evaluate on these criteria and respond in JSON format:
     "confidence_score": <0.0-1.0 overall confidence>,
     "suggestions": ["<suggestions for improvement>"]
 }}"""
-        
+
         try:
             result = self.llm.generate_structured(
                 critique_prompt,
                 output_schema={
                     "is_complete": "boolean",
-                    "is_accurate": "boolean", 
+                    "is_accurate": "boolean",
                     "is_safe": "boolean",
                     "missing_aspects": "array",
                     "concerns": "array",
@@ -257,7 +256,7 @@ Evaluate on these criteria and respond in JSON format:
                 },
                 system_prompt=self.CRITIQUE_PROMPT
             )
-            
+
             if "error" not in result:
                 return SelfCritiqueResult(
                     is_complete=result.get("is_complete", True),
@@ -270,7 +269,7 @@ Evaluate on these criteria and respond in JSON format:
                 )
         except Exception as e:
             print(f"Self-critique failed: {e}")
-        
+
         # Default result if critique fails
         return SelfCritiqueResult(
             is_complete=True,
@@ -278,7 +277,7 @@ Evaluate on these criteria and respond in JSON format:
             is_safe=True,
             confidence_score=0.5
         )
-    
+
     def should_retry(self, critique: SelfCritiqueResult) -> bool:
         """Determine if the answer should be regenerated."""
         # Retry if not safe or confidence is very low
@@ -289,24 +288,24 @@ Evaluate on these criteria and respond in JSON format:
         if not critique.is_complete and len(critique.missing_aspects) > 2:
             return True
         return False
-    
+
     def get_improvement_guidance(self, critique: SelfCritiqueResult) -> str:
         """Generate guidance for improving the answer."""
         guidance_parts = []
-        
+
         if not critique.is_complete:
             guidance_parts.append(
                 f"Address these missing aspects: {', '.join(critique.missing_aspects)}"
             )
-        
+
         if critique.concerns:
             guidance_parts.append(
                 f"Address these concerns: {', '.join(critique.concerns)}"
             )
-        
+
         if critique.suggestions:
             guidance_parts.append(
                 f"Consider: {', '.join(critique.suggestions)}"
             )
-        
+
         return " | ".join(guidance_parts) if guidance_parts else "Improve clarity and completeness."

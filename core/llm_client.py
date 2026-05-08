@@ -12,16 +12,16 @@ from config import LLMConfig, AWSConfig, create_boto3_session
 
 class BaseLLMClient(ABC):
     """Abstract base class for LLM clients."""
-    
+
     @abstractmethod
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Generate a response from the LLM."""
         pass
-    
+
     @abstractmethod
     def generate_with_tools(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         tools: List[Dict],
         system_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -31,19 +31,19 @@ class BaseLLMClient(ABC):
 
 class BedrockLLMClient(BaseLLMClient):
     """AWS Bedrock LLM client implementation."""
-    
+
     def __init__(self, llm_config: LLMConfig, aws_config: AWSConfig):
         self.config = llm_config
         self.aws_config = aws_config
         self.session = create_boto3_session(aws_config)
         self.client = self.session.client(
-            "bedrock-runtime", 
+            "bedrock-runtime",
             region_name=aws_config.region
         )
-    
+
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Generate a response using LLM on Bedrock."""
-        
+
         # Detect the model type and use the corresponding API format
         if "anthropic" in self.config.model_id:
             # Claude
@@ -57,7 +57,7 @@ class BedrockLLMClient(BaseLLMClient):
             }
             if system_prompt:
                 request_body["system"] = system_prompt
-                
+
         elif "titan" in self.config.model_id:
             # Amazon Titan
             full_prompt = prompt
@@ -71,7 +71,7 @@ class BedrockLLMClient(BaseLLMClient):
                     "topP": self.config.top_p
                 }
             }
-            
+
         elif "meta" in self.config.model_id or "llama" in self.config.model_id.lower():
             # Llama 3 format (different from Llama 2)
             if system_prompt:
@@ -103,14 +103,14 @@ class BedrockLLMClient(BaseLLMClient):
                     "temperature": self.config.temperature
                 }
             }
-        
+
         response = self.client.invoke_model(
             modelId=self.config.model_id,
             body=json.dumps(request_body)
         )
-        
+
         response_body = json.loads(response["body"].read())
-        
+
         # Parse the response based on the model type
         if "anthropic" in self.config.model_id:
             return response_body["content"][0]["text"]
@@ -120,16 +120,16 @@ class BedrockLLMClient(BaseLLMClient):
             return response_body["generation"]
         else:
             return response_body.get("results", [{}])[0].get("outputText", str(response_body))
-    
+
     def generate_with_tools(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         tools: List[Dict],
         system_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generate a response with tool use capability."""
         messages = [{"role": "user", "content": prompt}]
-        
+
         request_body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": self.config.max_tokens,
@@ -137,21 +137,21 @@ class BedrockLLMClient(BaseLLMClient):
             "messages": messages,
             "tools": tools
         }
-        
+
         if system_prompt:
             request_body["system"] = system_prompt
-        
+
         response = self.client.invoke_model(
             modelId=self.config.model_id,
             body=json.dumps(request_body)
         )
-        
+
         response_body = json.loads(response["body"].read())
         return response_body
-    
+
     def generate_structured(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         output_schema: Dict,
         system_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -163,9 +163,9 @@ Respond ONLY with a valid JSON object matching this schema:
 {json.dumps(output_schema, indent=2)}
 
 Do not include any text before or after the JSON."""
-        
+
         response_text = self.generate(json_prompt, system_prompt)
-        
+
         # Parse JSON from response
         try:
             # Handle potential markdown code blocks
@@ -173,7 +173,7 @@ Do not include any text before or after the JSON."""
                 response_text = response_text.split("```json")[1].split("```")[0]
             elif "```" in response_text:
                 response_text = response_text.split("```")[1].split("```")[0]
-            
+
             return json.loads(response_text.strip())
         except json.JSONDecodeError as e:
             # Return a default error structure
@@ -182,17 +182,17 @@ Do not include any text before or after the JSON."""
 
 class MockLLMClient(BaseLLMClient):
     """Mock LLM client for testing without AWS."""
-    
+
     def __init__(self):
         self.call_count = 0
-    
+
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         self.call_count += 1
         return f"Mock response #{self.call_count} for prompt: {prompt[:100]}..."
-    
+
     def generate_with_tools(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         tools: List[Dict],
         system_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -201,16 +201,16 @@ class MockLLMClient(BaseLLMClient):
             "content": [{"type": "text", "text": f"Mock tool response #{self.call_count}"}],
             "stop_reason": "end_turn"
         }
-    
+
     def generate_structured(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         output_schema: Dict,
         system_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generate mock structured response based on schema."""
         self.call_count += 1
-        
+
         # Return mock data based on what the schema expects
         if "is_complete" in str(output_schema):
             # Self-critique response
@@ -251,7 +251,7 @@ class MockLLMClient(BaseLLMClient):
 
 
 def create_llm_client(
-    llm_config: LLMConfig, 
+    llm_config: LLMConfig,
     aws_config: AWSConfig,
     use_mock: bool = False
 ) -> BaseLLMClient:
