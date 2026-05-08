@@ -3,10 +3,14 @@ LLM-as-a-Judge Evaluator for RAG System.
 Evaluates generated answers on multiple criteria using AWS Bedrock models.
 """
 import json
+import os
 import re
+import sys
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 import boto3
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import AWSConfig, create_boto3_session
 
