@@ -124,11 +124,11 @@ def main():
                 composite = ev.get("composite_score", 0.0)
                 pct = (composite / 5.0) * 100
                 if composite >= 4.0:
-                    print(f"  🎯 Composite Score: {composite:.2f}/5.00 ({pct:.0f}%) — Excellent")
-                elif composite >= 3.0:
                     print(f"  🎯 Composite Score: {composite:.2f}/5.00 ({pct:.0f}%) — Good")
+                elif composite >= 3.0:
+                    print(f"  🎯 Composite Score: {composite:.2f}/5.00 ({pct:.0f}%) — Fair")
                 elif composite > 0:
-                    print(f"  🎯 Composite Score: {composite:.2f}/5.00 ({pct:.0f}%) — Needs Improvement")
+                    print(f"  🎯 Composite Score: {composite:.2f}/5.00 ({pct:.0f}%) — Poor")
                 else:
                     print(f"  🎯 Composite Score: 0.00/5.00 — Abstention Gate Triggered")
 
