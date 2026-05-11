@@ -207,14 +207,10 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-<<<<<<< HEAD
-
-# Ignore only project data JSON
-data/cleaned/*.json
-#data/structured/*.json
-=======
 .DS_Store
 credentials.json
 token.json
 saved_data/
->>>>>>> main
+*.xlsx
+eval_results/
+calibration/*.csv
