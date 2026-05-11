@@ -12,6 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.agent import create_agent
+from config import default_config
 
 
 def main():
@@ -32,7 +33,11 @@ def main():
     except Exception as e:
         print(f"ERROR: Failed to connect to AWS: {e}")
         print("\nPlease ensure:")
-        print("  1. Run 'aws sso login --profile YOUR_AWS_PROFILE'")
+        profile = default_config.aws.profile_name
+        if profile:
+            print(f"  1. Run 'aws sso login --profile {profile}'")
+        else:
+            print("  1. AWS credentials are configured (IAM role or environment)")
         print("  2. Your AWS credentials are valid")
         return
     

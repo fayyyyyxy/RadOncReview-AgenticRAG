@@ -1,6 +1,10 @@
 import os
 import sys
 import subprocess
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from extract_doc_json import extract_json
 from clean_json import extract_hierarchical_sections
@@ -12,10 +16,10 @@ from embedding import add_embeddings, build_faiss_index
 
 
 # ----------------- Settings -----------------
-PROFILE_NAME="YOUR_AWS_PROFILE"
-S3_BUCKET_NAME = "YOUR_S3_BUCKET"
-REGION="YOUR_AWS_REGION"
-DYNAMODB_TABLE_NAME = "YOUR_DYNAMODB_TABLE"
+PROFILE_NAME = os.getenv("AWS_PROFILE_NAME", "")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "")
+REGION = os.getenv("AWS_REGION", "")
+DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "")
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 FAISS_INDEX_FILE = "radonc_faiss_index.bin"
 

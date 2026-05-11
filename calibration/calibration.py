@@ -26,6 +26,9 @@ import json
 import os
 import sys
 import numpy as np
+from pathlib import Path
+
+_CALIBRATION_DIR = Path(__file__).parent
 import openpyxl
 from scipy import stats
 from sklearn.isotonic import IsotonicRegression
@@ -171,7 +174,7 @@ def write_combined_csv(output_dir, rows, calibration_map):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--excel",      required=True)
-    parser.add_argument("--output_dir", default="calibration")
+    parser.add_argument("--output_dir", default=_CALIBRATION_DIR)
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)

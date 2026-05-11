@@ -39,13 +39,13 @@ import argparse
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import boto3
+
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+sys.path.insert(0, _PROJECT_ROOT)
 from config import default_config, create_boto3_session
 
-EXCEL_FILE       = "KP_test_questions_REVISED.xlsx"
-OUTPUT_DIR       = "eval_results"
+EXCEL_FILE       = os.path.join(_PROJECT_ROOT, "KP_test_questions_REVISED.xlsx")
+OUTPUT_DIR       = os.path.join(_PROJECT_ROOT, "eval_results")
 SKIP_FIRST_SHEET = True
 JUDGE_MODEL_ID   = "us.amazon.nova-pro-v1:0"
 DELAY_BETWEEN_Q  = 2.0

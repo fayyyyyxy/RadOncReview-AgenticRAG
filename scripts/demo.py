@@ -2,12 +2,11 @@
 Demo and testing script for the Agentic RAG Engine.
 Run this to test the system without AWS dependencies.
 """
-import sys
 import os
+import sys
 import json
 from datetime import datetime
 
-# Add project root to path when running this script directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.agent import create_agent

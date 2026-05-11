@@ -20,13 +20,15 @@ from dataclasses import dataclass
 from typing import List, Optional
 import boto3
 import openpyxl
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PROJECT_ROOT)
 from config import default_config, create_boto3_session
 from core.agent import AgenticRAGEngine
 
 
-EXCEL_FILE      = "KP_test_questions_REVISED.xlsx"
-OUTPUT_DIR      = "eval_results"          # one CSV per disease site goes here
+EXCEL_FILE      = os.path.join(_PROJECT_ROOT, "KP_test_questions_REVISED.xlsx")
+OUTPUT_DIR      = os.path.join(_PROJECT_ROOT, "eval_results")
 SKIP_FIRST_SHEET = True                   # skip "Summary + Legend" tab
 JUDGE_MODEL_ID  = "meta.llama3-70b-instruct-v1:0"
 DELAY_BETWEEN_Q = 2.0                     # seconds between questions

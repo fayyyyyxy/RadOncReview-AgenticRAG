@@ -142,9 +142,9 @@ class RetrieverManager:
                 score = r.get("score", 0.0)
 
                 # Derive title and category from S3 path
-                # e.g. s3://YOUR_S3_BUCKET/reading-lists/GI/Rectum/German Rectal Trial.pdf
+                # e.g. s3://<bucket>/reading-lists/GI/Rectum/German Rectal Trial.pdf
                 path_parts = s3_uri.replace(
-                    "s3://YOUR_S3_BUCKET/reading-lists/", ""
+                    f"s3://{self.aws_config.s3_bucket}/reading-lists/", ""
                 ).split("/")
                 disease = path_parts[0] if path_parts else "Unknown"
                 doc_title = (

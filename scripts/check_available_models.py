@@ -1,10 +1,9 @@
 """
 Detect which Bedrock models are available for your AWS account.
 """
-import sys
 import os
+import sys
 
-# Add project root to path when running this script directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import boto3

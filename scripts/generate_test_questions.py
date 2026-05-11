@@ -9,11 +9,11 @@ Logic:
   Output: test_questions.csv
 """
 
-import sys
 import os
+import sys
 
-# Add project root to path when running this script directly
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PROJECT_ROOT)
 
 import boto3
 import json
@@ -30,7 +30,7 @@ KB_ID         = default_config.aws.knowledge_base_id
 DS_ID         = default_config.aws.knowledge_base_datasource_id
 S3_PREFIX     = "reading-lists/"
 NOVA_MODEL_ID = "us.amazon.nova-pro-v1:0"
-OUTPUT_CSV    = "test_questions.csv"
+OUTPUT_CSV    = os.path.join(_PROJECT_ROOT, "test_questions.csv")
 
 CHUNKS_PER_TOPIC     = 80   # chunks retrieved per topic
 QUESTIONS_PER_TOPIC  = 3    # questions generated per topic

@@ -6,14 +6,18 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 import boto3
+from pathlib import Path
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).parent
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
 
 def _resolve_profile_name() -> Optional[str]:
-    """Local dev: defaults to "YOUR_AWS_PROFILE" profile.
-    Managed runtime (EC2/App Runner): set AWS_PROFILE_NAME to "" or "none"
-    to fall back to the instance/task IAM role.
+    """Local dev: set AWS_PROFILE_NAME to your SSO profile.
+    Managed runtime (App Runner): leave unset to use the IAM role.
     """
-    raw = os.getenv("AWS_PROFILE_NAME", "YOUR_AWS_PROFILE")
+    raw = os.getenv("AWS_PROFILE_NAME", "")
     if raw.strip().lower() in ("", "none"):
         return None
     return raw
@@ -23,14 +27,14 @@ def _resolve_profile_name() -> Optional[str]:
 class AWSConfig:
     """AWS service configuration."""
     profile_name: Optional[str] = field(default_factory=_resolve_profile_name)
-    region: str = os.getenv("AWS_REGION", "YOUR_AWS_REGION")
-    s3_bucket: str = "YOUR_S3_BUCKET"
-    dynamodb_table: str = "YOUR_DYNAMODB_TABLE"  
-    faiss_index_key: str = "radonc_faiss_index.bin"
+    region: str = field(default_factory=lambda: os.getenv("AWS_REGION", ""))
+    s3_bucket: str = field(default_factory=lambda: os.getenv("S3_BUCKET_NAME", ""))
+    dynamodb_table: str = field(default_factory=lambda: os.getenv("DYNAMODB_TABLE_NAME", ""))
+    faiss_index_key: str = field(default_factory=lambda: os.getenv("FAISS_INDEX_KEY", "radonc_faiss_index.bin"))
 
-    knowledge_base_id: str = "YOUR_KB_ID"
+    knowledge_base_id: str = field(default_factory=lambda: os.getenv("KB_ID", ""))
     knowledge_base_enabled: bool = True
-    knowledge_base_datasource_id: str = "YOUR_KB_DATASOURCE_ID"
+    knowledge_base_datasource_id: str = field(default_factory=lambda: os.getenv("KB_DATASOURCE_ID", ""))
 
 
 @dataclass
@@ -113,6 +117,22 @@ class Config:
 
 # Default configuration instance
 default_config = Config()
+
+
+def validate_config() -> None:
+    required = {
+        "AWS_REGION": default_config.aws.region,
+        "S3_BUCKET_NAME": default_config.aws.s3_bucket,
+        "DYNAMODB_TABLE_NAME": default_config.aws.dynamodb_table,
+        "KB_ID": default_config.aws.knowledge_base_id,
+        "KB_DATASOURCE_ID": default_config.aws.knowledge_base_datasource_id,
+    }
+    missing = [k for k, v in required.items() if not v]
+    if missing:
+        raise EnvironmentError(
+            f"Missing required environment variables: {', '.join(missing)}\n"
+            "Copy .env.example to .env and fill in the values."
+        )
 
 
 def create_boto3_session(aws_config: Optional[AWSConfig] = None) -> boto3.Session:

@@ -13,7 +13,9 @@ import os
 from pathlib import Path
 
 from core.agent import AgenticRAGEngine, create_agent
-from config import Config, default_config
+from config import Config, default_config, validate_config
+
+validate_config()
 
 
 # ============ Pydantic Models ============
