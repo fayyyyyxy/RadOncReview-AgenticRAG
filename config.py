@@ -30,7 +30,7 @@ class AWSConfig:
     region: str = field(default_factory=lambda: os.getenv("AWS_REGION", ""))
     s3_bucket: str = field(default_factory=lambda: os.getenv("S3_BUCKET_NAME", ""))
     dynamodb_table: str = field(default_factory=lambda: os.getenv("DYNAMODB_TABLE_NAME", ""))
-    faiss_index_key: str = field(default_factory=lambda: os.getenv("FAISS_INDEX_KEY", "radonc_faiss_index.bin"))
+    faiss_index_key: str = "radonc_faiss_index.bin"
 
     knowledge_base_id: str = field(default_factory=lambda: os.getenv("KB_ID", ""))
     knowledge_base_enabled: bool = True
@@ -131,7 +131,7 @@ def validate_config() -> None:
     if missing:
         raise EnvironmentError(
             f"Missing required environment variables: {', '.join(missing)}\n"
-            "Copy .env.example to .env and fill in the values."
+            "Copy env_example to .env and fill in the values."
         )
 
 
