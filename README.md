@@ -1,349 +1,357 @@
-# Agentic RAG Engine for Radiation Oncology
+# RadOncReview Agentic RAG
 
-An autonomous Retrieval Augmented Generation (RAG) system for radiation oncology treatment guidelines retrieval. This system connects to AWS services (S3, DynamoDB, Bedrock) to provide accurate, citation-backed answers to clinical questions.
+## Introduction
 
-## Architecture
+Radiation oncology treatment decisions are grounded in a rapidly evolving body of clinical evidence — hundreds of trials, institutional guidelines, and disease-site protocols that are difficult to synthesize quickly at the point of care. Clinicians need fast, reliable access to this evidence to support treatment planning and patient communication, yet existing tools rarely integrate structured guidelines with primary trial literature in a unified interface.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        User Query                                   │
-│            "What is the standard dose for breast cancer?"           │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Input Guardrails                                │
-│               • PHI Detection & Filtering                           │
-│               • Input Validation                                    │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Query Analyzer                                  │
-│               • Intent Classification                               │
-│               • Disease Category Detection                          │
-│               • Treatment Modality Extraction                       │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Task Planner                                    │
-│               • Query Decomposition                                 │
-│               • Retrieval Strategy Selection                        │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                   Retriever Manager                                 │
-│    ┌───────────┐    ┌───────────┐    ┌───────────────────┐          │
-│    │   FAISS   │    │ DynamoDB  │    │  Amazon Titan     │          │
-│    │  (S3)     │    │ (Chunks)  │    │  (Embeddings)     │          │
-│    └───────────┘    └───────────┘    └───────────────────┘          │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                  Response Synthesizer                               │
-│               • Llama 3 70B (via Bedrock)                           │
-│               • Citation Generation                                 │
-│               • Self-Critique & Validation                          │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Output Guardrails                                │
-│               • Safety Verification                                 │
-│               • Medical Disclaimer Addition                         │
-└─────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Final Response                                 │
-│          Answer + Citations + Confidence Score                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+This project presents an agentic RAG system designed specifically for radiation oncology clinical decision support. It retrieves from two complementary sources: curated treatment guidelines from [RadOncReview](https://www.radoncreview.org/) and 700+ clinical trial papers from Northwestern Medicine, delivering answers grounded in authoritative evidence with full source citations. The system adapts its retrieval strategy to query complexity, applies cross-encoder reranking, and evaluates every response with a multi-agent LLM judge calibrated against human labels. Key capabilities include evidence-grounded answers with clickable source links, live quality scoring via a calibrated composite score, and abstention when evidence is insufficient.
 
-## Prerequisites
+---
 
-Before using this system, ensure you have:
+## System Overview
 
-1. **Python 3.9+** installed
-2. **AWS CLI** configured with SSO access
-3. **Data Pipeline Completed** - The `data_prep` pipeline must have been run to populate:
-   - S3 bucket with FAISS index (`radonc_faiss_index.bin`)
-   - DynamoDB table with chunk data (`YOUR_DYNAMODB_TABLE`)
+<!-- Placeholder for pipeline diagram -->
 
-## Setup
+### Two modes
 
-### Step 1 — Install Dependencies
+| | Local | AWS App Runner |
+|---|---|---|
+| How to run | `python chat.py` (CLI) or `python api.py` (browser) | Auto-deployed from GitHub repo |
+| AWS auth | SSO profile (`.env`) | IAM role |
+| Intended for | Development / evaluation | Physician-facing clinical use |
+
+---
+
+## Demo
+
+**Entering a query and receiving an answer:**
+
+<!-- GIF: query input → answer with citations -->
+
+**Clicking a source link:**
+
+<!-- GIF: source citation → opens linked document -->
+
+**Composite score breakdown:**
+
+<!-- GIF: composite score panel expanding -->
+
+---
+
+## Setup & Replication
+
+### Step 1 — Clone the repo and set up a virtual environment
+
 ```bash
-# Create virtual environment (recommended)
+git clone https://github.com/akiqiu8/RadOncReview-AgenticRAG.git
+cd RadOncReview-AgenticRAG
+
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install required packages
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-# Download spaCy model (for text processing)
-python -m spacy download en_core_web_sm
 ```
 
-### Step 2 — Set up external services
+### Step 2 — Google Docs API
 
-Before running the data preparation pipeline, you must complete two one-time setup steps:
+The data preparation pipeline pulls treatment guidelines directly from Google Docs (source: [RadOncReview](https://www.radoncreview.org/)).
 
-**Google Docs API** — needed to pull treatment guideline documents from Google Docs.
 Follow the setup guide: [`data_prep/setup-guides/GoogleDocsAPI-setup.pdf`](data_prep/setup-guides/GoogleDocsAPI-setup.pdf)
 
-This will produce two credential files that must be placed inside `data_prep/`:
-- `credentials.json` — OAuth2 client credentials downloaded from Google Cloud Console
-- `token.json` — generated automatically on first run via browser-based OAuth flow
+This produces two credential files — place both inside `data_prep/`:
+- `credentials.json` — OAuth2 client credentials from Google Cloud Console
+- `token.json` — generated automatically on first run via browser OAuth flow
 
-**AWS CLI** — needed to access S3, DynamoDB, and Bedrock.
+### Step 3 — AWS CLI and SSO
+
 Follow the setup guide: [`data_prep/setup-guides/AWS-CLI-setup.pdf`](data_prep/setup-guides/AWS-CLI-setup.pdf)
 
-
-Once installed, configure your SSO profile (first time only):
+Configure your SSO profile (first time only):
 ```bash
-aws configure sso --profile YOUR_AWS_PROFILE
-# You will be prompted for:
-# - SSO start URL (get from your AWS admin)
-# - SSO region: YOUR_AWS_REGION
-# - Account and role selection
+aws configure sso --profile <your-profile>
 ```
 
-Then log in (required every session):
+Log in before each session:
 ```bash
-aws sso login --profile YOUR_AWS_PROFILE
+aws sso login --profile <your-profile>
 ```
 
-### Step 3 — Verify AWS configuration
+You will need access to: **S3**, **DynamoDB**, **Bedrock** (Knowledge Base + LLM models), and **AWS App Runner**.
 
-Edit `config.py` if your AWS settings differ from the defaults:
-```python
-@dataclass
-class AWSConfig:
-    profile_name: str = "YOUR_AWS_PROFILE"
-    region: str = "YOUR_AWS_REGION"
-    s3_bucket: str = "YOUR_S3_BUCKET"
-    dynamodb_table: str = "YOUR_DYNAMODB_TABLE"
-    faiss_index_key: str = "radonc_faiss_index.bin"
+### Step 4 — Configure environment variables
+
+```bash
+cp env_example .env
 ```
 
-### Step 4 — Run the data preparation pipeline
+Open `.env` and fill in your values:
 
-> ⚠️ This step only needs to be run **once** (or whenever the source documents are updated).
+| Variable | Description |
+|----------|-------------|
+| `AWS_PROFILE_NAME` | Your SSO profile name (local only — leave empty on App Runner) |
+| `AWS_REGION` | AWS region where your resources are deployed |
+| `S3_BUCKET_NAME` | S3 bucket storing the FAISS index |
+| `DYNAMODB_TABLE_NAME` | DynamoDB table storing document chunks |
+| `KB_ID` \* | Bedrock Knowledge Base ID |
+| `KB_DATASOURCE_ID` \* | Bedrock Knowledge Base Data Source ID |
+
+> \* Optional — required only if using the clinical trials source stored in Bedrock KB (see Step 6)
+
+### Step 5 — Run the data preparation pipeline
+
+This populates S3, DynamoDB, and builds the FAISS index from RadOncReview guideline documents. Run once, or re-run whenever source documents are updated.
+
 ```bash
 python data_prep/main.py
 ```
 
-## Usage
+This will:
+1. Pull treatment guideline documents from Google Docs
+2. Clean and chunk the text
+3. Generate embeddings (Amazon Titan)
+4. Upload chunks to DynamoDB
+5. Build and upload the FAISS index to S3
 
-### Interactive Chat (Recommended)
+### Step 6 — (Optional) Set up Bedrock Knowledge Base for clinical trials
 
-Start an interactive chat session:
+This step is **optional**. The RAG system runs without it — you simply lose the clinical trial paper retrieval source.
 
+If you have clinical trial documents (PDF, DOCX, scanned PDF, etc.):
+
+1. Go to **AWS Console → Amazon Bedrock → Knowledge Bases**
+2. Click **Create knowledge base**
+3. Under **Data source**, select S3 — upload your documents to a dedicated S3 prefix (e.g. `s3://your-bucket/reading-lists/`)
+4. For parsing, select **Amazon Nova Pro** as the foundation model parser (recommended for scanned PDFs and DOCX)
+5. For chunking strategy, select **Fixed-size** (or other) and adjust token size & overlap based on your LLM's context window
+6. For the vector store, select **OpenSearch Serverless**
+7. Complete setup and click **Sync**
+8. Copy the **Knowledge Base ID** and **Data Source ID** → add to `.env` as `KB_ID` and `KB_DATASOURCE_ID`
+
+> This project indexes 700+ clinical trial papers organized by disease site (DOCX, PDF, scanned PDF).
+
+### Step 7 — Run locally
+
+**CLI interface:**
 ```bash
 python chat.py
 ```
 
-Example session:
-
-```
-============================================================
-  RadOnc Agentic RAG - Interactive Chat
-============================================================
-
-Connecting to AWS...
-Connected successfully!
-
-Ask questions about radiation oncology treatment guidelines.
-Type 'quit' or 'exit' to end the session.
-Type 'trace' to show reasoning trace for the last query.
-------------------------------------------------------------
-
-You: What is the standard dose for breast cancer?
-
-Thinking...
-[10:38:14] GUARDRAIL: Checking input safety
-[10:38:14] ANALYZE: Intent: dose_fractionation, Disease: Breast
-[10:38:14] PLAN: Created 1 sub-tasks
-[10:38:15] RETRIEVE: Found 10 relevant chunks
-[10:38:17] SYNTHESIZE: Generating answer...
-
-Agent: Based on the guidelines, hypofractionation is recommended for 
-whole breast irradiation. The standard regimens are 40 Gy in 15 fractions 
-(START B) or 42.5 Gy in 16 fractions (Whelan) [1][2].
-
-[Confidence: 85.0% | Citations: 3 | Latency: 3200ms]
-
-Sources:
-  [1] Breast > Fractionation
-  [2] Breast > Whole Breast Irradiation
-
-You: trace
-
---- Reasoning Trace ---
-  [10:38:14] GUARDRAIL: Checking input safety
-  [10:38:14] ANALYZE: Intent: dose_fractionation, Disease: Breast
-  [10:38:14] PLAN: Created 1 sub-tasks: Simple query
-  [10:38:15] RETRIEVE: Task completed, found 10 chunks
-  [10:38:17] SYNTHESIZE: Generated answer with 3 citations
-  [10:38:17] CRITIQUE: Complete: True, Accurate: True, Safe: True
-------------------------------
-
-You: quit
-Goodbye!
-```
-
-### Streamlit Web UI
-
-```bash
-streamlit run ui_streamlit.py
-```
-
-### REST API
-
-Start the API server:
-
+**Browser interface (localhost:8000):**
 ```bash
 python api.py
-# Or with hot reload:
-uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-API endpoints:
+Then open `http://localhost:8000` in your browser.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/query` | POST | Submit a question |
-| `/feedback` | POST | Submit feedback |
-| `/categories` | GET | List disease categories |
-| `/modalities` | GET | List treatment modalities |
+### (Optional) Deploy to AWS App Runner
 
-Example API call:
+App Runner runs `api.py` as a containerized web service with a public URL.
 
+1. Connect your GitHub repo in the App Runner Console
+2. Set the following **Runtime environment variables** in Console → Configuration → Edit:
+
+| Variable | Value |
+|----------|-------|
+| `AWS_PROFILE_NAME` | none |
+| `AWS_REGION` | your region |
+| `S3_BUCKET_NAME` | your bucket |
+| `DYNAMODB_TABLE_NAME` | your table |
+| `KB_ID` | your KB ID |
+| `KB_DATASOURCE_ID` | your datasource ID |
+
+Set `AWS_PROFILE_NAME` to `none` (or leave it unset) — App Runner uses the attached IAM role automatically.
+
+> **Note:** If any value changes, update it in **both** `.env` (local) and App Runner Console (deployed).
+
+> **Note:** AWS App Runner is no longer accepting new customers as of April 30, 2026. Existing services continue to run. For new deployments consider AWS ECS/Fargate.
+
+---
+
+## Components
+
+### 1. Data Preparation (`data_prep/`)
+
+Pulls treatment guidelines from [RadOncReview](https://www.radoncreview.org/) Google Docs, processes them into chunks, generates embeddings, and stores everything in AWS:
+
+```
+Google Docs → extract → clean → chunk → embed (Titan) → DynamoDB + FAISS (S3)
+```
+
+| Setting | Value |
+|---------|-------|
+| Embedding model | `amazon.titan-embed-text-v2:0` (1024-dim) |
+| Chunk size | 300 tokens, 45-token overlap |
+| Vector store | FAISS index stored in S3, metadata in DynamoDB |
+
+Clinical trial papers (700+, including DOCX and scanned PDF) are separately uploaded to S3 and indexed via Bedrock Knowledge Base (see Step 6).
+
+### 2. RAG Engine (`core/`)
+
+`core/agent.py` orchestrates every step below. Each query goes through a multi-step agentic pipeline:
+
+| Step | Component | Model / Config | Description |
+|------|-----------|----------------|-------------|
+| 1 | Input Guardrails | — | PHI detection, input length validation |
+| 2 | Query Analyzer | `meta.llama3-70b-instruct-v1:0` | Intent classification, disease category, treatment modality extraction |
+| 3 | Task Planner | `meta.llama3-70b-instruct-v1:0` | Query decomposition, retrieval strategy selection |
+| 4 | Retriever | FAISS + DynamoDB + Bedrock KB |  FAISS: dense search; KB: hybrid search. top-6 FAISS & top-10 KB per topic| 
+| 5 | Reranker | `BAAI/bge-reranker-base` (cross-encoder) | Rerank to top-5 (simple) or top-3 per topic (complex/comparison) |
+| 6 | Synthesizer | `meta.llama3-70b-instruct-v1:0` | Response generation with inline citations |
+| 7 | Self-Critique | `meta.llama3-70b-instruct-v1:0` | Evaluates completeness, accuracy, safety — retries if needed |
+| 8 | Output Guardrails | — | Safety verification, disclaimer injection |
+| 9 | LLM Judge v3 (`evaluation/llm_judge_v3.py`) | `us.amazon.nova-pro-v1:0` | **Online** evaluation after each response: retrieval adequacy, abstention, faithfulness, correctness, answer quality — composite score shown in chat |
+
+### 3. Evaluation Pipeline (`evaluation/`, `calibration/`, `scripts/`)
+
+The LLM judge operates in two modes: **offline** (batch evaluation on a labeled test set, used to calibrate the score and compute composite) and **online** (called automatically by the RAG engine after each response, as shown in Step 9 above). **The offline pipeline must be run first**: the online composite score depends on `calibration/weights.json` and `calibration/calibration_map.json` generated by the offline pipeline.
+
+```
+Generate questions → LLM judge (batch) → Human labels → Calibration → Weights
+```
+
+**Step 1 — Generate test questions**
 ```bash
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: YOUR_API_KEY" \
-  -d '{
-    "query": "What is the standard dose for breast cancer?",
-    "include_reasoning": true,
-    "include_citations": true
-  }'
+python scripts/generate_test_questions.py
+# Output: test_questions.csv
 ```
 
-### Python API
+Uses `us.amazon.nova-pro-v1:0` to generate clinically realistic QA pairs from KB-retrieved chunks, organized by disease site and 5 clinical topics (outcomes, dose/fractionation, toxicity, trial comparison, patient selection). **Need physicians to review and revise the generated questions & expected answers before proceeding**.
 
-Use the agent programmatically:
+**Step 2 — Run batch LLM evaluation**
+```bash
+python evaluation/llm_judge_v3.py --excel <your-excel>.xlsx
+# Output: eval_results/<disease_site>.csv
 
-```python
-from agent import create_agent
-
-# Create agent (connects to AWS)
-agent = create_agent(use_mock=False)
-
-# Query
-response = agent.query("What is the standard dose for breast cancer?")
-
-# Access results
-print(response.answer)
-print(f"Confidence: {response.confidence_score:.1%}")
-
-for citation in response.citations:
-    print(f"[{citation.citation_id}] {citation.source_path}")
-
-# View reasoning trace
-for step in response.reasoning_trace:
-    print(step)
+# To evaluate by disease site (recommended to avoid partial failures on large sets):
+python evaluation/llm_judge_v3.py --excel <your-excel>.xlsx --sheet Breast
 ```
+
+Five specialized judge agents (`us.amazon.nova-pro-v1:0`) score each answer across six criteria (Correctness evaluated in two variants):
+
+| Criterion | Scale | What it evaluates |
+|-----------|-------|-------------------|
+| Retrieval Adequacy | 1–5 | Are the retrieved chunks sufficient to answer the question? |
+| Abstention | Yes / No | Should the system have abstained (evidence insufficient)? |
+| Faithfulness | 1–5 | Is the answer grounded in retrieved documents, with no hallucination? |
+| Correctness A | 1–5 | How well does the answer match the expected reference answer? *(batch eval only)* |
+| Correctness B | 1–5 | Is the conclusion aligned with the retrieved documents? *(RAG proxy — used live)* |
+| Answer Quality | 1–5 | Clarity, completeness, and clinical usefulness of the answer |
+
+**Step 3 — Physician review & labeling (Human-in-the-loop)**
+
+Have a physician open the output Excel file and fill in human scores for the Correctness and Answer Quality columns. Clinical expertise is required to assess answer accuracy against ground truth.
+
+**Step 4 — Calibration**
+```bash
+python calibration/calibration.py --excel <your-excel>.xlsx
+# Outputs:
+#   calibration/calibration_map.json  — isotonic regression lookup per criterion
+#   calibration/weights.json          — Spearman-derived criterion weights
+#   calibration/combined_eval.csv     — all rows with raw + calibrated scores
+```
+Fits **Isotonic Regression** (scikit-learn) on Correctness B and Answer Quality to align LLM scores with human labels. Then computes **Spearman correlation** between each criterion and human correctness scores to derive normalized weights.
+
+**Composite score (live, shown in chat):**
+
+```
+composite = Σ weight[k] × calibrated_score[k]
+            for k in {retrieval_adequacy, faithfulness, correctness_b, answer_quality}
+```
+
+- Correctness B and Answer Quality use calibrated scores via isotonic lookup
+- Retrieval Adequacy and Faithfulness use raw scores
+- **Abstention gate:** if the Abstention judge determines the system should not have answered, composite = 0 regardless of other scores
+
+**Live output shown in chat:**
+
+| Output | Description |
+|--------|-------------|
+| Latency | End-to-end response time |
+| Sources | Citations with clickable document links |
+| Reasoning trace | Step-by-step agent log |
+| Composite score | Weighted calibrated score (0–5); 0 if abstention triggered |
+
+---
 
 ## Project Structure
 
 ```
 RadOncReview-AgenticRAG/
-├── config.py                   # Configuration settings (AWS, LLM, retrieval)
-├── models.py                   # Data models (QueryAnalysis, AgentResponse, etc.)
-├── agent.py                    # Main agent orchestrator
-├── query_analyzer.py           # Query intent & entity extraction
-├── task_planner.py             # Task decomposition & planning
-├── retriever.py                # FAISS search & DynamoDB retrieval
-├── synthesizer.py              # LLM response generation & self-critique
-├── guardrails.py               # Input/output safety checks
-├── llm_client.py               # AWS Bedrock LLM client
-├── chat.py                     # Interactive CLI chat interface
-├── api.py                      # REST API server (FastAPI)
-├── ui_streamlit.py             # Streamlit web UI
-├── demo.py                     # Demo & component testing scripts
-├── check_available_models.py   # Detect available Bedrock models
-├── requirements.txt            # Python dependencies
+├── config.py                      # Configuration (AWS, LLM, retrieval params)
+├── chat.py                        # Interactive CLI chat interface
+├── api.py                         # REST API server (FastAPI)
+├── requirements.txt               # Dependencies
+├── env_example                    # Environment variable template (copy to .env)
 │
-└── data_prep/
-    ├── main.py                 # Data preparation pipeline (run once)
-    ├── extract_doc_json.py     # Pull raw JSON from Google Docs API
-    ├── clean_json.py           # Format raw JSON into hierarchical sections
-    ├── flattening_chunking.py  # Flatten hierarchy + sentence-level chunking
-    ├── embedding.py            # Generate embeddings + build FAISS index
-    ├── DynamoDB_store_load.py  # Upload/load chunks to/from DynamoDB
-    ├── s3_store_load.py        # Upload/load files to/from S3
-    ├── helper.py               # Utility functions
+├── static/
+│   └── index.html                 # Web frontend (served by api.py)
+│
+├── core/                          
+│   ├── agent.py                   # RAG main orchestrator
+│   ├── models.py                  # Data models
+│   ├── llm_client.py              # AWS Bedrock LLM client
+│   ├── query_analyzer.py          # Intent classification & entity extraction
+│   ├── task_planner.py            # Query decomposition & retrieval strategy
+│   ├── retriever.py               # FAISS + DynamoDB + Bedrock KB + reranking
+│   ├── synthesizer.py             # Response generation & self-critique
+│   └── guardrails.py              # Input/output safety checks
+│
+├── evaluation/                    
+│   ├── llm_judge_v3.py            # Multi-agent LLM judge (Current)
+│   ├── llm_judge_v2.py            # Previous version
+│   └── llm_judge.py               # Previous version
+│
+├── calibration/
+│   ├── calibration.py             # Isotonic regression + Spearman weights
+│   ├── calibration_map.json       # Generated by calibration.py
+│   └── weights.json               # Generated by calibration.py
+│
+├── scripts/
+│   ├── generate_test_questions.py # Generate QA pairs from KB via Nova Pro
+│   ├── check_available_models.py  # Detect available Bedrock models
+│   └── demo.py                    # Test (mock mode, no AWS required)
+│
+└── data_prep/                     
+    ├── main.py                    # One-time data ingestion pipeline
+    ├── extract_doc_json.py        # Pull raw JSON from Google Docs API
+    ├── clean_json.py              # Format into hierarchical sections
+    ├── flattening_chunking.py     # Flatten + sentence-level chunking
+    ├── embedding.py               # Generate embeddings + build FAISS index
+    ├── DynamoDB_store_load.py     # Upload/load chunks to/from DynamoDB
+    ├── s3_store_load.py           # Upload/load files to/from S3
+    ├── helper.py                  # Utility functions
     └── setup-guides/
         ├── GoogleDocsAPI-setup.pdf
         └── AWS-CLI-setup.pdf
 ```
 
-## Supported Query Types
-
-| Intent | Example Questions |
-|--------|-------------------|
-| Dose/Fractionation | "What is the dose for breast IMRT?" |
-| Treatment Protocol | "What is the standard treatment for stage III lung cancer?" |
-| Side Effects | "What are the side effects of whole brain radiation?" |
-| Comparison | "Compare SBRT vs conventional fractionation" |
-| Indications | "When is proton therapy indicated?" |
-| Contraindications | "What are contraindications for brachytherapy?" |
-| Staging | "How is T2N1M0 breast cancer treated?" |
-
-## Supported Disease Categories
-
-- Breast
-- Thorax (Lung, Esophagus)
-- Hematologic (Lymphoma, Leukemia)
-- CNS (Brain tumors)
-- GI (Gastric, Pancreatic, Colorectal)
-- GU (Prostate, Bladder)
-- Gynecologic (Cervical, Uterine)
-- Head & Neck
-- Pediatric
-- Sarcoma
-- Skin (Melanoma)
+---
 
 ## Troubleshooting
 
-### AWS Connection Issues
-
+**AWS connection error (local)**
 ```bash
-# Re-login to AWS SSO
-aws sso login --profile YOUR_AWS_PROFILE
-
-# Verify connection
-aws s3 ls s3://YOUR_S3_BUCKET --profile YOUR_AWS_PROFILE
+aws sso login --profile $AWS_PROFILE_NAME
 ```
 
-### Model Access Denied
-
-Run the model checker to see available models:
-
+**Bedrock model access denied**
 ```bash
-python check_available_models.py
+python scripts/check_available_models.py
+```
+Then edit `LLMConfig.model_id` in `config.py` to a model available in your account.
+
+**No results returned**
+- Confirm `python data_prep/main.py` has been run
+- Verify the DynamoDB table has data and the FAISS index exists in S3
+
+**Composite score missing in chat (FileNotFoundError)**
+```bash
+python calibration/calibration.py --excel <your-excel>.xlsx
 ```
 
-Update `config.py` with an available model.
+---
 
-### No Results Found
+## Contributors
 
-1. Check if data pipeline has been run (`data_prep/main.py`)
-2. Verify DynamoDB table exists and has data
-3. Verify FAISS index exists in S3
+- Rachel Gong
+- Mu He
+- Shan Zhong
