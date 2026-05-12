@@ -126,7 +126,7 @@ def process_document(doc_config, current_faiss_id):
     chunk_embeddings = add_embeddings(flattened_chunks, EMBEDDING_MODEL, PROFILE_NAME, REGION) 
     save_json(disease_category, "chunk_embeddings", save_dir, chunk_embeddings)
 
-    return next_faiss_id
+    return chunk_embeddings, next_faiss_id
 
 
 def main():
@@ -144,24 +144,23 @@ def main():
     for doc in DOCUMENTS_TO_PROCESS:
         try:
             # Process document and get its chunks and the ID for the next document
-            #doc_chunks, current_faiss_id = process_document(doc, current_faiss_id)
-            current_faiss_id = process_document(doc, current_faiss_id) 
-            #all_chunk_embeddings.extend(doc_chunks)
+            doc_chunks, current_faiss_id = process_document(doc, current_faiss_id)
+            all_chunk_embeddings.extend(doc_chunks)
         except Exception as e:
             print(f"Failed to process document {doc['disease_category']}: {e}")
             continue 
 
     # 7. Build FAISS Index for ALL documents and upload it to S3
-    # if all_chunk_embeddings:
-    #     local_faiss_path = os.path.join(save_dir, FAISS_INDEX_FILE)
-    #     build_faiss_index(all_chunk_embeddings, local_faiss_path)
-        
-    #     index_file_to_upload = [(local_faiss_path, FAISS_INDEX_FILE)]
-    #     upload_file_to_s3(index_file_to_upload, S3_BUCKET_NAME, PROFILE_NAME)
-    #     print(f"FAISS Index successfully uploaded to s3://{S3_BUCKET_NAME}/{FAISS_INDEX_FILE}")
-        
-    # else:
-    #     print("No documents processed successfully. FAISS index not built.")
+    if all_chunk_embeddings:
+        local_faiss_path = os.path.join(save_dir, FAISS_INDEX_FILE)
+        build_faiss_index(all_chunk_embeddings, local_faiss_path)
+
+        index_file_to_upload = [(local_faiss_path, FAISS_INDEX_FILE)]
+        upload_file_to_s3(index_file_to_upload, S3_BUCKET_NAME, PROFILE_NAME)
+        print(f"FAISS Index successfully uploaded to s3://{S3_BUCKET_NAME}/{FAISS_INDEX_FILE}")
+
+    else:
+        print("No documents processed successfully. FAISS index not built.")
 
 
 if __name__ == "__main__":
