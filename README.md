@@ -10,7 +10,9 @@ This project presents an agentic RAG system designed specifically for radiation 
 
 ## System Overview
 
-<!-- Placeholder for pipeline diagram -->
+### Pipeline Architecture
+
+![Pipeline Diagram](assets/Pipeline.jpg)
 
 ### Two modes
 
