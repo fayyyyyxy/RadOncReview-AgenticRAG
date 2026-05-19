@@ -28,15 +28,15 @@ This project presents an agentic RAG system designed specifically for radiation 
 
 **Entering a query and receiving an answer:**
 
-<!-- GIF: query input → answer with citations -->
+![Entering a query and receiving an answer](assets/input.gif)
 
 **Clicking a source link:**
 
-<!-- GIF: source citation → opens linked document -->
+![Clicking a source link](assets/citation.gif)
 
 **Composite score breakdown:**
 
-<!-- GIF: composite score panel expanding -->
+![Composite score breakdown](assets/score.gif)
 
 ---
 
@@ -283,6 +283,8 @@ RadOncReview-AgenticRAG/
 ├── api.py                         # REST API server (FastAPI)
 ├── requirements.txt               # Dependencies
 ├── env_example                    # Environment variable template (copy to .env)
+│
+├── assets/                            # Pipeline diagram and demo GIFs
 │
 ├── static/
 │   └── index.html                 # Web frontend (served by api.py)
