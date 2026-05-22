@@ -4,20 +4,23 @@ Must be run before starting evaluation/llm_judge_v3.py.
 
 Steps:
   1. Read Excel (all disease-site sheets)
-  2. Fit Isotonic Regression for correctness_b and answer_quality vs human scores
-  3. Add calibrated columns to combined_eval.csv
-  4. Output calibration_map.json
-  5. Compute Spearman rho (calibrated scores + raw faithfulness/retrieval vs Human correctness) → output weights.json
+  2. Average two physician evaluation scores (H1, H2) → ground truth
+     Rows missing either physician score are skipped.
+  3. Fit Isotonic Regression for correctness_b and answer_quality vs averaged human scores
+  4. Add calibrated columns to combined_eval.csv
+  5. Output calibration_map.json
+  6. Compute Spearman rho (calibrated scores + raw faithfulness/retrieval vs avg human correctness)
+     → output weights.json
 
 Outputs
 -------
   calibration/calibration_map.json  per-criteria lookup table {score: calibrated_value}
   calibration/weights.json          normalized Spearman weights
-  calibration/combined_eval.csv     all rows with raw + calibrated
+  calibration/combined_eval.csv     all rows with raw + calibrated + averaged human scores
 
 Usage
 -----
-  python calibration/calibration.py --excel xxxxx.xlsx
+  python calibration/calibration.py --excel Test_question_Human_Eval.xlsx
 """
 
 import argparse
@@ -40,8 +43,10 @@ EXCEL_COLUMNS = {
     "quality_raw":      "answer_quality_score(completeness)",
     "faithfulness_raw": "faithfulness_score",
     "retrieval_raw":    "retrieval_adequacy_score",
-    "human_corr":       "Correctness_Kishan",
-    "human_qual":       "Answer Quality_Kishan",
+    "h1_corr":          "Correctness_H1",
+    "h1_qual":          "Answer_Quality_H1",
+    "h2_corr":          "Correctness_H2",
+    "h2_qual":          "Answer_Quality_H2",
 }
 
 SKIP_SHEETS = {"Summary + Legend", "Kishan Evaluation Summary"}
@@ -62,9 +67,21 @@ def read_excel(excel_path: str) -> list:
             mapped = {"sheet": sheet_name}
             for canonical, excel_col in EXCEL_COLUMNS.items():
                 mapped[canonical] = record.get(excel_col)
+
+            # Average two physician scores — None if either is missing
+            h1c = mapped.get("h1_corr")
+            h2c = mapped.get("h2_corr")
+            h1q = mapped.get("h1_qual")
+            h2q = mapped.get("h2_qual")
+
+            mapped["human_corr"] = (float(h1c) + float(h2c)) / 2 if (h1c is not None and h2c is not None) else None
+            mapped["human_qual"] = (float(h1q) + float(h2q)) / 2 if (h1q is not None and h2q is not None) else None
+
             rows.append(mapped)
     wb.close()
     print(f"  Read {len(rows)} rows from {len(wb.sheetnames) - len(SKIP_SHEETS)} sheets")
+    skipped = sum(1 for r in rows if r["human_corr"] is None or r["human_qual"] is None)
+    print(f"  Rows with both physician scores present: {len(rows) - skipped}  (skipped {skipped} missing)")
     return rows
 
 
@@ -73,11 +90,11 @@ def fit_isotonic(x_vals, y_vals) -> dict:
     Fit isotonic regression and return a lookup table {raw_score: calibrated_value}
     for integer scores 1-5.
     Isotonic guarantees monotone mapping: higher raw score → higher calibrated score.
+    y_vals are averaged physician scores and may be non-integer (e.g. 3.5).
     """
     X = np.array(x_vals)
     Y = np.array(y_vals)
     ir = IsotonicRegression(out_of_bounds="clip").fit(X, Y)
-    # Build lookup table for integer scores 1-5
     lookup = {}
     for score in range(1, 6):
         lookup[str(score)] = round(float(ir.predict([score])[0]), 4)
@@ -96,6 +113,7 @@ def compute_weights(rows, calibration_map):
                ["human_corr", "corr_b_raw", "quality_raw",
                 "faithfulness_raw", "retrieval_raw"])
     ]
+    print(f"    Using {len(valid)} rows for weight computation")
     human = np.array([float(r["human_corr"]) for r in valid])
 
     criteria_vals = {
@@ -115,7 +133,7 @@ def compute_weights(rows, calibration_map):
     for name, vals in criteria_vals.items():
         rho, _ = stats.spearmanr(vals, human)
         rhos[name] = abs(rho)
-        print(f"    rho({name:<20} vs Human correctness) = {rho:.4f}")
+        print(f"    rho({name:<20} vs avg physician correctness) = {rho:.4f}")
 
     total = sum(rhos.values())
     weights = {k: round(v / total, 4) for k, v in rhos.items()}
@@ -140,7 +158,9 @@ def write_combined_csv(output_dir, rows, calibration_map):
         "corr_b_raw", "corr_b_calibrated",
         "quality_raw", "quality_calibrated",
         "faithfulness_raw", "retrieval_raw",
-        "human_corr", "human_qual",
+        "h1_corr", "h1_qual",
+        "h2_corr", "h2_qual",
+        "human_corr_avg", "human_qual_avg",
     ]
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -153,8 +173,12 @@ def write_combined_csv(output_dir, rows, calibration_map):
                 "quality_raw":      r["quality_raw"],
                 "faithfulness_raw": r["faithfulness_raw"],
                 "retrieval_raw":    r["retrieval_raw"],
-                "human_corr":       r["human_corr"],
-                "human_qual":       r["human_qual"],
+                "h1_corr":          r["h1_corr"],
+                "h1_qual":          r["h1_qual"],
+                "h2_corr":          r["h2_corr"],
+                "h2_qual":          r["h2_qual"],
+                "human_corr_avg":   r["human_corr"],
+                "human_qual_avg":   r["human_qual"],
             }
             for crit, raw_key, cal_key in [
                 ("correctness",    "corr_b_raw",  "corr_b_calibrated"),
