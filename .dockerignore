@@ -1,0 +1,16 @@
+.env
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+data_prep/
+scripts/
+assets/
+eval_results/
+*.xlsx
+*.zip
+README.md
+env_example
+Dockerfile
+.dockerignore

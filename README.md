@@ -287,6 +287,7 @@ RadOncReview-AgenticRAG/
 ├── chat.py                        # Interactive CLI chat interface
 ├── api.py                         # REST API server (FastAPI)
 ├── requirements.txt               # Dependencies
+├── Dockerfile                     # Container image (pre-downloads Cross-Encoder model for fast cold start)
 ├── env_example                    # Environment variable template (copy to .env)
 │
 ├── assets/                            # Pipeline diagram and demo GIFs
