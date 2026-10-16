@@ -11,7 +11,7 @@ patient_cases/
 ├── data/                 # Local workbook and inputs; contents ignored by Git
 │   └── README.md
 ├── load_scenarios.py      # Workbook loading and validation
-├── run_baseline.py        # Placeholder for development-case baseline runs
+├── run_baseline.py        # Development-case baseline runs; dry-run by default
 └── outputs/              # Local generated results; contents ignored by Git
 ```
 
@@ -68,8 +68,58 @@ size, independent of workbook row order; it is not stratified by disease site.
 If validation fails, no new exports are written. Previously generated files
 are not deleted and must not be treated as current after a failed run.
 
-run_baseline.py remains a placeholder. No embeddings, AWS requests, or LLM
-calls are performed by the loader.
+No embeddings, AWS requests, or LLM calls are performed by the loader.
+
+## Baseline runner
+
+Use the project virtual environment. The baseline engine needs boto3, faiss-cpu,
+sentence-transformers, python-dotenv and openpyxl. The loader-only installation
+above does not install the complete baseline environment.
+
+```bash
+source .venv/bin/activate
+python -m pip install boto3 faiss-cpu sentence-transformers python-dotenv openpyxl
+python patient_cases/run_baseline.py
+```
+
+The default is a dry run: it validates all baseline inputs against eligible
+development rows in the current workbook and selects one case, without
+importing the engine, contacting AWS, or printing narratives. Extra fields
+(including reference plans), non-development IDs, and modified input text
+are rejected. Run the loader again after changing the source workbook.
+
+After setting up your local ignored .env and AWS SSO login, explicitly request
+one real case:
+
+```bash
+python patient_cases/run_baseline.py --execute --limit 1
+```
+
+This downloads the reranker model if needed, reads existing AWS evidence,
+creates query embeddings, and makes paid LLM calls in the configured account.
+It does not retrieve institutional examples or change the existing RAG code.
+The separate LLM judge is off by default; self-critique remains enabled as
+configured by the existing engine. Add --judge only if its extra model calls
+and calibration requirements are intended. Temperature is set to zero; this
+does not guarantee identical model responses on repeated runs.
+
+Each run has its own ignored outputs/baseline_<timestamp>_<id>/ folder with
+manifest.json, startup.log, and results.jsonl. Results are appended after
+each case and include answer, citations, retrieved passages/task plan, logs,
+timing and errors. These files contain clinical text and may contain expiring
+source URLs; keep them local or in approved storage. A startup failure is
+saved separately. Metadata records the code commit, dirty-tree status,
+configuration and input hashes; the live evidence index is not frozen.
+
+Queries exceeding the existing input limit are skipped, never truncated.
+Blocked responses, missing evidence/citations and incomplete retrieval are
+flagged. Inspect logs even when response generation succeeds: the existing
+engine may fall back after reranker or retrieval errors. A generated response
+is not a clinical accuracy assessment. No automatic retries or resume are
+provided; rerunning creates a new folder and can incur charges again.
+
+After reviewing the first case, use --execute --limit 10 for the full
+development subset. Locked-test evaluation is outside this runner's scope.
 
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
