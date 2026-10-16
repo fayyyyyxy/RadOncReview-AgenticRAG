@@ -214,3 +214,9 @@ saved_data/
 *.xlsx
 eval_results/
 calibration/*.csv
+
+# Local patient-case inputs and generated results
+/patient_cases/data/*
+!/patient_cases/data/README.md
+/patient_cases/outputs/*
+!/patient_cases/outputs/.gitkeep
