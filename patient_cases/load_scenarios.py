@@ -30,6 +30,28 @@ REQUIRED_VALUES = CORE_FIELDS + (
     "Split", "Worked-Example Eligible", "LLM Use", "Disease Site", "Setting",
     "Prior RT", "Encounter Type",
 )
+CLINICAL_METADATA_FIELDS = {
+    "disease_site": "Disease Site",
+    "subsite": "Subsite",
+    "setting": "Setting",
+    "prior_rt": "Prior RT",
+    "technique": "Technique",
+    "encounter_type": "Encounter Type",
+}
+PATIENT_LINKAGE_FIELDS = {
+    "patient_id": "Patient ID",
+    "encounter_number": "Encounter #",
+    "first_encounter_at_site": "First Encounter (site)",
+}
+GOVERNANCE_FIELDS = {
+    "split": "Split",
+    "worked_example_eligible": "Worked-Example Eligible",
+    "llm_use": "LLM Use",
+}
+PROVENANCE_FIELDS = {
+    "batch": "Batch",
+    "source_code": "Source Code",
+}
 
 
 def blank(value):
@@ -97,17 +119,31 @@ def validate_records(records):
 
 
 def development_examples(records):
-    """Keep plans as payload, never as part of the embedding search text."""
+    """Export the approved field groups without mixing metadata roles."""
     return [
         {
             "case_id": r["Case ID"],
-            "patient_id": r["Patient ID"],
             "vignette": r[VIGNETTE],
             "clinical_question": r[QUESTION],
             "search_text": f"{r[VIGNETTE]}\n\n{r[QUESTION]}",
             "attending_plan": r[PLAN],
             "label": "Institutional example – not evidence",
-            "metadata": {key: value for key, value in r.items() if key not in CORE_FIELDS},
+            "metadata": {
+                key: r[column]
+                for key, column in CLINICAL_METADATA_FIELDS.items()
+            },
+            "patient_linkage": {
+                key: r.get(column)
+                for key, column in PATIENT_LINKAGE_FIELDS.items()
+            },
+            "governance": {
+                key: r[column]
+                for key, column in GOVERNANCE_FIELDS.items()
+            },
+            "provenance": {
+                key: r.get(column)
+                for key, column in PROVENANCE_FIELDS.items()
+            },
         }
         for r in sorted(records, key=lambda r: r["Case ID"])
         if r["Split"] == "Development" and r["Worked-Example Eligible"] == "Yes"

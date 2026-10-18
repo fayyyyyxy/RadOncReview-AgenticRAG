@@ -4,8 +4,8 @@ from copy import deepcopy
 import unittest
 
 from load_scenarios import (
-    PLAN, QUESTION, VIGNETTE, baseline_inputs, development_examples,
-    validate_records,
+    CLINICAL_METADATA_FIELDS, PLAN, QUESTION, VIGNETTE, baseline_inputs,
+    development_examples, validate_records,
 )
 
 
@@ -31,6 +31,13 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual({r["case_id"] for r in examples}, {"D1", "D2"})
         for example in examples:
             self.assertNotIn(example["attending_plan"], example["search_text"])
+            self.assertEqual(set(example["metadata"]), set(CLINICAL_METADATA_FIELDS))
+            self.assertNotIn("patient_id", example["metadata"])
+            self.assertNotIn("Age", example["metadata"])
+            self.assertNotIn("Sex", example["metadata"])
+            self.assertEqual(example["patient_linkage"]["patient_id"], example["case_id"].replace("D", "P"))
+            self.assertEqual(example["governance"]["split"], "Development")
+            self.assertNotIn("attending_plan", example["provenance"])
         for item in baseline_inputs(examples, 2, 42):
             self.assertEqual(set(item), {"case_id", "vignette", "clinical_question"})
 
