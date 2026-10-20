@@ -33,13 +33,18 @@ Guidelines for your responses:
         self.llm = llm_client
         self.config = config
 
-    def _format_context(self, chunks: List[Dict]) -> tuple[str, List[Citation]]:
-        """Format retrieved chunks into context string and citation list."""
+    def _format_context(
+        self, chunks: List[Dict], start: int = 1
+    ) -> tuple[str, List[Citation], List[Dict]]:
+        """Format retrieved chunks into context string, citation list and full context passages."""
         context_parts = []
         citations = []
+        passages = []
 
         for i, chunk in enumerate(chunks):
-            citation_id = i + 1
+            # 💡 The only place numbers are assigned: the [n] label the LLM reads and the
+            # Citation object always share one value, so they cannot drift apart.
+            citation_id = start + i
             text = chunk.get("text", "")
             score = chunk.get("similarity_score", 0) or chunk.get("relevance_score", 0)
 
@@ -64,9 +69,11 @@ Guidelines for your responses:
                 document_title=chunk.get("document_title", ""),
                 source_type=source_type
             ))
+            # Full text, unlike chunk_text, so evaluators see exactly what the LLM saw
+            passages.append({"citation_id": citation_id, "source_path": path, "text": text})
 
         context = "\n---\n".join(context_parts)
-        return context, citations
+        return context, citations, passages
 
     def _extract_citations_used(self, answer: str) -> List[int]:
         """Extract citation numbers used in the answer."""
@@ -80,7 +87,7 @@ Guidelines for your responses:
         analysis: QueryAnalysis,
         plan: TaskPlan,
         all_chunks: List[Dict]
-    ) -> tuple[str, List[Citation], float]:
+    ) -> tuple[str, List[Citation], float, List[Dict]]:
         """Synthesize an answer from retrieved chunks."""
 
         if not all_chunks:
@@ -88,11 +95,12 @@ Guidelines for your responses:
                 "I could not find relevant information in the knowledge base to answer "
                 "your question. Please try rephrasing your query or ask about a different topic.",
                 [],
-                0.0
+                0.0,
+                []
             )
 
         # Format context and prepare citations
-        context, all_citations = self._format_context(all_chunks)
+        context, all_citations, passages = self._format_context(all_chunks)
 
         # Build synthesis prompt
         synthesis_prompt = f"""Based on the following retrieved information, answer the clinical question.
@@ -132,31 +140,33 @@ Answer:"""
         else:
             confidence = 0.3  # Low confidence if no citations
 
-        return answer, used_citations, confidence
+        return answer, used_citations, confidence, passages
 
     def synthesize_multi_topic(
         self,
         query: str,
         analysis: QueryAnalysis,
         chunks_by_topic: Dict[str, List[Dict]]
-    ) -> tuple[str, List[Citation], float]:
+    ) -> tuple[str, List[Citation], float, List[Dict]]:
         """Synthesize an answer from multiple retrieval results."""
 
         # Format context for each topic
         context_parts = []
         all_citations = []
+        all_passages = []
         citation_counter = 1
 
         for topic, chunks in chunks_by_topic.items():
-            topic_context, topic_citations = self._format_context(chunks)
-
-            # Renumber citations
-            for citation in topic_citations:
-                citation.citation_id = citation_counter
-                citation_counter += 1
+            # ⚠️ Number while formatting. Renumbering Citation objects afterwards left every
+            # topic's text labelled [1]..[k], so a cited [2] could point at the wrong topic.
+            topic_context, topic_citations, topic_passages = self._format_context(
+                chunks, start=citation_counter
+            )
+            citation_counter += len(topic_citations)
 
             context_parts.append(f"### {topic} ###\n{topic_context}")
             all_citations.extend(topic_citations)
+            all_passages.extend({**p, "topic": topic} for p in topic_passages)
 
         full_context = "\n\n".join(context_parts)
 
@@ -192,7 +202,7 @@ Answer:"""
         else:
             confidence = 0.3
 
-        return answer, used_citations, confidence
+        return answer, used_citations, confidence, all_passages
 
 
 class SelfCritic:

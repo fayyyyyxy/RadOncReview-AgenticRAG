@@ -354,11 +354,11 @@ class AgenticRAGEngine:
         self._log_reasoning("SYNTHESIZE", "Generating response from retrieved information")
 
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-            answer, citations, confidence = self.synthesizer.synthesize_multi_topic(
+            answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
                 processed_query, analysis, chunks_by_topic
             )
         else:
-            answer, citations, confidence = self.synthesizer.synthesize(
+            answer, citations, confidence, context_passages = self.synthesizer.synthesize(
                 processed_query, analysis, plan, all_chunks
             )
         self._log_reasoning("SYNTHESIZE",
@@ -398,12 +398,12 @@ class AgenticRAGEngine:
                 # Re-synthesize — use same path as first attempt based on query type
                 if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
                     chunks_by_topic = self._collect_multi_topic_chunks(improved_plan)
-                    answer, citations, confidence = self.synthesizer.synthesize_multi_topic(
+                    answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
                         processed_query, analysis, chunks_by_topic
                     )
                 else:
                     all_chunks = self._collect_all_chunks(improved_plan)
-                    answer, citations, confidence = self.synthesizer.synthesize(
+                    answer, citations, confidence, context_passages = self.synthesizer.synthesize(
                         processed_query, analysis, improved_plan, all_chunks
                     )
 
@@ -439,6 +439,7 @@ class AgenticRAGEngine:
             reasoning_trace=self.reasoning_trace,
             self_critique=critique,
             task_plan=plan,
+            context_passages=context_passages,
             metadata={
                 "analysis": {
                     "intent": analysis.intent.value,
