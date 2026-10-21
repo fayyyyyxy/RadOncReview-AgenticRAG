@@ -20,6 +20,10 @@ sys.path.insert(0, str(REPO))
 
 from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, read_records, validate_records
 
+# Model for every engine LLM call in evaluation runs. Llama 3 70B's 8k context overflowed on
+# long evidence; the web app keeps config.py's default until a site is declared GO.
+WRITER_MODEL = "meta.llama3-1-70b-instruct-v1:0"
+
 
 def make_query(record):
     return f"Patient vignette:\n{record['vignette']}\n\nClinical question:\n{record['clinical_question']}"
@@ -94,6 +98,7 @@ def main(argv=None):
     parser.add_argument("--inputs", type=Path, default=ROOT / "data/processed/baseline_inputs.jsonl")
     parser.add_argument("--workbook", type=Path, default=DEFAULT_WORKBOOK)
     parser.add_argument("--limit", type=int, default=1)
+    parser.add_argument("--model", default=WRITER_MODEL, help="Bedrock model ID for every engine LLM call.")
     parser.add_argument("--execute", action="store_true", help="Make real AWS retrieval and paid model calls.")
     parser.add_argument("--judge", action="store_true", help="Enable additional paid LLM judge calls.")
     args = parser.parse_args(argv)
@@ -105,7 +110,7 @@ def main(argv=None):
         # No engine import, model download or AWS calls in dry-run mode.
         if not args.execute:
             print(json.dumps({
-                "mode": "dry_run", "aws_calls": 0,
+                "mode": "dry_run", "aws_calls": 0, "model": args.model,
                 "validated_development_inputs": len(inputs),
                 "selected": [{"case_id": r["case_id"], "query_characters": len(make_query(r))} for r in selected],
                 "note": "No attending plans passed; no answers generated. Use --execute for a real run.",
@@ -117,6 +122,8 @@ def main(argv=None):
         validate_config()
         config = Config()
         config.llm.temperature = 0.0
+        # ⚠️ One shared client serves the analyzer, planner, writer and self-critique, so all of them switch
+        config.llm.model_id = args.model
         # Log all settings, including the opt-in judge difference from the web app.
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
         changes = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True, text=True)
