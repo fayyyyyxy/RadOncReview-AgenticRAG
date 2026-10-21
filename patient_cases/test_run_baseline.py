@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from load_scenarios import QUESTION, VIGNETTE
-from run_baseline import load_inputs, make_query, run_case
+from run_baseline import load_inputs, main, make_query, run_case
 from test_load_scenarios import record
 
 
@@ -42,6 +42,14 @@ class BaselineTests(unittest.TestCase):
     def test_oversize_query_does_not_call_engine(self):
         result = run_case(None, self.input, 1)
         self.assertEqual(result["status"], "skipped_input_too_long")
+
+    def test_bad_or_taken_name_fails_before_any_input_is_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "outputs" / "stage1_answers").mkdir(parents=True)
+            with patch("run_baseline.ROOT", Path(folder)), patch("run_baseline.load_inputs") as load:
+                self.assertEqual(main(["--name", "stage 1"]), 1)
+                self.assertEqual(main(["--name", "stage1"]), 1)
+                load.assert_not_called()
 
     def test_engine_failure_is_recorded(self):
         class FailingEngine:

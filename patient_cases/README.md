@@ -107,7 +107,8 @@ does not guarantee identical model responses on repeated runs. Every engine LLM
 call uses Llama 3.1 70B (128k context) by default for evaluation runs; pass
 --model to choose another. The web app keeps the config.py default.
 
-Each run has its own ignored outputs/baseline_<timestamp>_<id>/ folder with
+Each run has its own ignored folder, outputs/<name>_answers/ when --name is
+given (for example --name stage1), otherwise outputs/baseline_<timestamp>_<id>/, with
 manifest.json, startup.log, and results.jsonl. Results are appended after
 each case and include answer, citations, retrieved passages/task plan, logs,
 timing and errors. These files contain clinical text and may contain expiring
@@ -131,15 +132,16 @@ Every stage of the build ladder answers the same 40-case evaluation set and is
 scored by the frozen judge:
 
 ```bash
-python patient_cases/run_baseline.py --inputs patient_cases/data/processed/evaluation_inputs.jsonl --limit 40 --execute
-python patient_cases/judge_baseline.py patient_cases/outputs/baseline_<id> --execute
-python patient_cases/ladder_report.py add <stage> patient_cases/outputs/judge_<id>
+python patient_cases/run_baseline.py --inputs patient_cases/data/processed/evaluation_inputs.jsonl --limit 40 --name stage1 --execute
+python patient_cases/judge_baseline.py patient_cases/outputs/stage1_answers --execute
+python patient_cases/ladder_report.py add 1 patient_cases/outputs/judge_<id>
 ```
 
 `add` refuses a run that did not answer the current evaluation set in full, or
 whose judge (model, prompts, code, workbook) or answer-writing model settings
 differ from stage 0. Stage 0 takes two runs, which measure run-to-run noise;
-later stages take one each, in order. It then writes the ignored
+later stages take one each, in order. It renames judge_<id> after its answers
+folder (stage1_answers is scored in stage1_scores) and writes the ignored
 outputs/ladder.json registry and outputs/ladder_report.html, a self-contained
 page of scores and case IDs only. Use `ladder_report.py build` to regenerate
 the page without registering a run.

@@ -8,6 +8,7 @@ from enum import Enum
 import hashlib
 import io
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -101,8 +102,15 @@ def main(argv=None):
     parser.add_argument("--model", default=WRITER_MODEL, help="Bedrock model ID for every engine LLM call.")
     parser.add_argument("--execute", action="store_true", help="Make real AWS retrieval and paid model calls.")
     parser.add_argument("--judge", action="store_true", help="Enable additional paid LLM judge calls.")
+    parser.add_argument("--name", help="Readable run name such as stage1; answers go to outputs/<name>_answers.")
     args = parser.parse_args(argv)
     try:
+        if args.name is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", args.name):
+            raise ValueError("--name may contain only letters, digits, '-' and '_'.")
+        # Checked before any paid call, so a clashing name never costs a run
+        named = ROOT / "outputs" / f"{args.name}_answers" if args.name else None
+        if named is not None and named.exists():
+            raise ValueError(f"{named.name} already exists; choose another --name.")
         inputs = load_inputs(args.inputs, args.workbook)
         if not 1 <= args.limit <= len(inputs):
             raise ValueError(f"--limit must be between 1 and {len(inputs)}.")
@@ -111,6 +119,7 @@ def main(argv=None):
         if not args.execute:
             print(json.dumps({
                 "mode": "dry_run", "aws_calls": 0, "model": args.model,
+                "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
                 "selected": [{"case_id": r["case_id"], "query_characters": len(make_query(r))} for r in selected],
                 "note": "No attending plans passed; no answers generated. Use --execute for a real run.",
@@ -128,7 +137,7 @@ def main(argv=None):
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
         changes = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True, text=True)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
-        output = ROOT / "outputs" / ("baseline_" + run_id)
+        output = named or ROOT / "outputs" / ("baseline_" + run_id)
         output.mkdir(parents=True, exist_ok=False)
         manifest = {
             "run_id": run_id, "mode": "existing_evidence_only_rag",

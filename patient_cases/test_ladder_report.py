@@ -62,10 +62,11 @@ class RegistryTests(unittest.TestCase):
     def tearDown(self):
         self.folder.cleanup()
 
-    def run_folder(self, name, finals, input_sha=None, writer="llama", **judge_changes):
-        (self.root / f"baseline_{name}").mkdir()
+    def run_folder(self, name, finals, input_sha=None, writer="llama", answers=None, **judge_changes):
+        answers = answers or f"baseline_{name}"
+        (self.root / answers).mkdir()
         llm = {"model_id": writer, "temperature": 0.0, "max_tokens": 2048, "top_p": 0.9}
-        (self.root / f"baseline_{name}" / "manifest.json").write_text(json.dumps({
+        (self.root / answers / "manifest.json").write_text(json.dumps({
             "input_sha256": input_sha or sha256(self.inputs), "case_ids": list(CASES),
             "config": {"llm": llm}}), encoding="utf-8")
         judge = self.root / f"judge_{name}"
@@ -73,7 +74,7 @@ class RegistryTests(unittest.TestCase):
         # Cases left out of `finals` stand for failed generations, which the judge skips
         skipped = {case: "error" for case in CASES if case not in finals}
         (judge / "manifest.json").write_text(json.dumps({
-            **self.judge, **judge_changes, "baseline_run": f"baseline_{name}",
+            **self.judge, **judge_changes, "baseline_run": answers,
             "case_ids": sorted(finals), "skipped": skipped}), encoding="utf-8")
         (judge / "scores.jsonl").write_text("".join(json.dumps({
             "case_id": case, "disease_site": "Site", "status": "scored", "final": f,
@@ -114,6 +115,13 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(built["comparisons"][1]["metrics"]["no_answer"]["verdict"], "worse")
         self.assertTrue(built["comparisons"][1]["stop"])
         self.assertIn('class="noanswer"', render(registry, built))
+
+    def test_scores_folder_is_named_after_its_answers(self):
+        judge = self.run_folder("a", {"C1": final(), "C2": final()}, answers="stage0_run-a_answers")
+        registry = self.add(0, judge)
+        self.assertFalse(judge.exists())
+        self.assertTrue((self.root / "stage0_run-a_scores" / "scores.jsonl").exists())
+        self.assertEqual(registry["runs"][0]["judge_run"], "stage0_run-a_scores")
 
     def test_changed_judge_or_cases_are_refused(self):
         self.add(0, self.run_folder("a", {"C1": final(), "C2": final()}))

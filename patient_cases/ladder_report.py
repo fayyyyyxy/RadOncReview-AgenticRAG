@@ -171,8 +171,17 @@ def register(stage, judge_dir, registry_path=REGISTRY, inputs_path=EVALUATION_IN
     if stage > 0 and counts[stage - 1] < (2 if stage == 1 else 1):
         raise ValueError(f"Stage {stage - 1} must be complete before stage {stage}.")
 
+    # Scores take the readable name of the answers they grade (stage1_answers -> stage1_scores); the judge
+    # itself still writes judge_<id>, because changing its code would break the frozen-judge check above
+    answers = judge["baseline_run"]
+    if answers.endswith("_answers"):
+        target = judge_dir.with_name(answers[: -len("_answers")] + "_scores")
+        if target != judge_dir:
+            if target.exists():
+                raise ValueError(f"{target.name} already exists.")
+            judge_dir = judge_dir.rename(target)
     registry["runs"].append({
-        "stage": stage, "judge_run": judge_dir.name, "baseline_run": judge["baseline_run"],
+        "stage": stage, "judge_run": judge_dir.name, "baseline_run": answers,
         "registered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     })
     Path(registry_path).parent.mkdir(parents=True, exist_ok=True)
