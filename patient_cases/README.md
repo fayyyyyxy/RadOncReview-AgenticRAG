@@ -157,3 +157,31 @@ case and other encounters belonging to the same patient. Patient ID is for
 this grouping check, not a clinical similarity feature or model input. Other
 metadata also needs review before model use: for example, Technique may
 describe the delivered treatment rather than information known at decision time.
+
+## Past-case index
+
+Development cases eligible as worked examples form a local index of earlier
+cases, kept apart from the evidence index:
+
+```bash
+python patient_cases/build_past_case_index.py --execute
+python patient_cases/check_past_cases.py
+```
+
+The build embeds the vignette and clinical question with Titan v2 and writes
+the ignored data/processed/past_case_index/ folder: vectors, records carrying
+the attending plan as payload, and a manifest. It embeds only new or reworded
+cases; label corrections update records without new embeddings. Locked-test
+cases are refused.
+
+Selection (core/past_cases.py) keeps at most two cases from the selected
+disease site: same setting group and prior-RT group first, then same setting
+group, then site only. It never uses another site, the case itself or another
+encounter of the same patient. Encounter type reorders the ten most similar
+cases in each tier, and an optional similarity floor drops weak examples.
+
+The check runs every indexed case as a query with its own workbook labels,
+counts rule violations, and writes outputs/past_cases_check/review.html: a
+seeded sample of cases outside the evaluation set beside their chosen
+examples. The page holds clinical text; keep it local. --min-similarity writes
+to its own folder.
