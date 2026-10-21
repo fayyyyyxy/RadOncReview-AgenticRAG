@@ -52,6 +52,12 @@ PROVENANCE_FIELDS = {
     "batch": "Batch",
     "source_code": "Source Code",
 }
+INPUT_FIELDS = ("case_id", "vignette", "clinical_question")
+# Fixed evaluation set: the baseline cases plus per-site quotas, favouring prior-dose reasoning
+EVALUATION_SIZE = 40
+SITE_QUOTA = 3
+SMALL_SITE_QUOTA = {"Pediatrics": 2, "Skin": 2}
+CUMULATIVE_PRIOR_RT = ("Prior RT – adjacent", "Prior RT – cumulative OAR dose")
 
 
 def blank(value):
@@ -156,9 +162,70 @@ def baseline_inputs(examples, size, seed):
         raise ValueError(f"Baseline size must be between 1 and {len(examples)}.")
     selected = random.Random(seed).sample(sorted(examples, key=lambda r: r["case_id"]), size)
     return [
-        {key: r[key] for key in ("case_id", "vignette", "clinical_question")}
+        {key: r[key] for key in INPUT_FIELDS}
         for r in sorted(selected, key=lambda r: r["case_id"])
     ]
+
+
+def needs_cumulative_dose(prior_rt):
+    """Prior RT labels where the new plan must account for dose already given nearby."""
+    return prior_rt.startswith("Re-irradiation") or prior_rt in CUMULATIVE_PRIOR_RT
+
+
+def evaluation_set(examples, baseline_ids, seed, size=EVALUATION_SIZE):
+    """Keep the baseline cases, then fill site quotas by priority with one case per new patient."""
+    site = lambda r: r["metadata"]["disease_site"]
+    patient = lambda r: r["patient_linkage"]["patient_id"]
+    by_id = {r["case_id"]: r for r in examples}
+    chosen = [by_id[case_id] for case_id in baseline_ids]
+    quota = {site(r): SMALL_SITE_QUOTA.get(site(r), SITE_QUOTA) for r in examples}
+    # 💡 Shuffle a sorted copy: the same records and seed give the same order whatever the workbook row order
+    pool = sorted(examples, key=lambda r: r["case_id"])
+    random.Random(seed).shuffle(pool)
+
+    def pick(wanted):
+        taken = {r["case_id"] for r in chosen}
+        patients = {patient(r) for r in chosen}
+        for r in pool:
+            full = sum(site(c) == site(r) for c in chosen) >= quota[site(r)]
+            # ⚠️ Baseline cases may share a patient (BR-003 / BR-082); new picks never add a second encounter
+            if r["case_id"] in taken or full or patient(r) in patients or not wanted(r):
+                continue
+            chosen.append(r)
+            return True
+        return False
+
+    priorities = (
+        (lambda r: needs_cumulative_dose(r["metadata"]["prior_rt"]), 8),
+        (lambda r: r["metadata"]["prior_rt"] != "None", 12),
+        (lambda r: r["metadata"]["encounter_type"] == "Boost", 4),
+        (lambda r: True, size),
+    )
+    # Each pass adds matching cases until the set holds `target` of them or none can be added
+    for wanted, target in priorities:
+        while len(chosen) < size and sum(map(wanted, chosen)) < target and pick(wanted):
+            pass
+    if len(chosen) != size:
+        raise ValueError(f"Only {len(chosen)} of {size} evaluation cases fit the site quotas.")
+    return sorted(chosen, key=lambda r: r["case_id"])
+
+
+def evaluation_labels(chosen, baseline_ids, seed):
+    """Case IDs and workbook labels for reports; no narratives, plans or patient IDs."""
+    return {
+        "seed": seed,
+        "size": len(chosen),
+        "unique_patients": len({r["patient_linkage"]["patient_id"] for r in chosen}),
+        "cases": [
+            {
+                "case_id": r["case_id"],
+                "baseline": r["case_id"] in baseline_ids,
+                **{key: r["metadata"][key] for key in ("disease_site", "setting", "prior_rt", "encounter_type")},
+                "needs_cumulative_dose": needs_cumulative_dose(r["metadata"]["prior_rt"]),
+            }
+            for r in chosen
+        ],
+    }
 
 
 def write_jsonl(path, records):
@@ -179,6 +246,9 @@ def main(argv=None):
         validate_records(records)
         examples = development_examples(records)
         baseline = baseline_inputs(examples, args.baseline_size, args.seed)
+        baseline_ids = [r["case_id"] for r in baseline]
+        evaluation = evaluation_set(examples, baseline_ids, args.seed)
+        labels = evaluation_labels(evaluation, baseline_ids, args.seed)
         summary = {
             "validation": "passed",
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -193,11 +263,15 @@ def main(argv=None):
             "locked_test_records_exported": 0,
             "baseline_size": len(baseline),
             "baseline_seed": args.seed,
+            "evaluation_size": labels["size"],
+            "evaluation_unique_patients": labels["unique_patients"],
         }
         # Validate and construct all results before writing any export.
         processed = ROOT / "data" / "processed"
         write_jsonl(processed / "development_examples.jsonl", examples)
         write_jsonl(processed / "baseline_inputs.jsonl", baseline)
+        write_jsonl(processed / "evaluation_inputs.jsonl", [{key: r[key] for key in INPUT_FIELDS} for r in evaluation])
+        (processed / "evaluation_set.json").write_text(json.dumps(labels, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         output = ROOT / "outputs" / "data_summary.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

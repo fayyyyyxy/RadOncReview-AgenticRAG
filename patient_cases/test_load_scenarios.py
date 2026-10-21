@@ -5,8 +5,12 @@ import unittest
 
 from load_scenarios import (
     CLINICAL_METADATA_FIELDS, PLAN, QUESTION, VIGNETTE, baseline_inputs,
-    development_examples, validate_records,
+    development_examples, evaluation_labels, evaluation_set, validate_records,
 )
+
+
+def labelled(case_id, patient_id, site, prior_rt="None", encounter="New start"):
+    return {**record(case_id, patient_id), "Disease Site": site, "Prior RT": prior_rt, "Encounter Type": encounter}
 
 
 def record(case_id, patient_id, split="Development"):
@@ -64,6 +68,27 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(baseline_inputs(examples, 1, 42), baseline_inputs(examples[::-1], 1, 42))
         with self.assertRaises(ValueError):
             baseline_inputs(examples, 3, 42)
+
+    def test_evaluation_set_keeps_baseline_and_fills_quotas_by_priority(self):
+        # Each priority pass has exactly one eligible candidate, so the result does not depend on the seed
+        rows = [
+            labelled("B1", "P1", "A"), labelled("B2", "P1", "A"),         # baseline pair, one patient
+            labelled("A1", "P2", "A", "Re-irradiation (overlap)"),          # fills site A's third slot
+            labelled("A2", "P3", "A", "Re-irradiation (overlap)"),          # site A is full
+            labelled("C1", "P1", "C", "Re-irradiation (overlap)"),          # baseline patient again
+            labelled("C2", "P4", "C"), labelled("C3", "P5", "C", "Prior RT – different site"),
+            labelled("C4", "P6", "C", encounter="Boost"),
+        ]
+        examples = development_examples(rows)
+        chosen = evaluation_set(examples, ["B1", "B2"], 42, size=5)
+        self.assertEqual([r["case_id"] for r in chosen], ["A1", "B1", "B2", "C3", "C4"])
+        self.assertEqual(chosen, evaluation_set(examples[::-1], ["B1", "B2"], 42, size=5))
+        labels = evaluation_labels(chosen, ["B1", "B2"], 42)
+        self.assertEqual(labels["unique_patients"], 4)
+        self.assertNotIn("vignette", labels["cases"][0])
+        self.assertTrue(labels["cases"][0]["needs_cumulative_dose"])
+        with self.assertRaisesRegex(ValueError, "site quotas"):
+            evaluation_set(examples, ["B1", "B2"], 42, size=7)
 
 
 if __name__ == "__main__":

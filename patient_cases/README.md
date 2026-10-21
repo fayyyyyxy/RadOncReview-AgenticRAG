@@ -58,6 +58,8 @@ On success it creates or replaces:
 | --- | --- |
 | data/processed/development_examples.jsonl | Eligible development records only, with vignette, question, search_text, attending_plan, study IDs, label, and remaining original columns under metadata |
 | data/processed/baseline_inputs.jsonl | Seeded sample of 10 development records by default; only case_id, vignette, clinical_question |
+| data/processed/evaluation_inputs.jsonl | Fixed evaluation set of 40 development records: the 10 baseline cases, then up to 3 per disease site (2 for Pediatrics and Skin), favouring cases that need cumulative-dose reasoning, any prior RT, then boosts, with one case per new patient; same three fields |
+| data/processed/evaluation_set.json | Case IDs and workbook labels (site, setting, prior RT, encounter type) of the evaluation set, for reports; no narratives, plans or patient IDs |
 | outputs/data_summary.json | Counts, validation status, sample seed and size, timestamp, source filename and SHA-256 hash; no narratives or reference plans |
 
 JSONL contains one JSON object per line. search_text combines only vignette
