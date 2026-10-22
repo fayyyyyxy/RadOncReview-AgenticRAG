@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ladder_report import FROZEN, compare, ladder, noise, register, render, sha256
+from ladder_report import FROZEN, compare, ladder, noise, register, reject, render, sha256
 
 
 def final(accuracy=3.0, harm=1, hallucination="N", citations="N", abstention="NA"):
@@ -115,6 +115,34 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(built["comparisons"][1]["metrics"]["no_answer"]["verdict"], "worse")
         self.assertTrue(built["comparisons"][1]["stop"])
         self.assertIn('class="noanswer"', render(registry, built))
+
+    def test_a_stage_not_adopted_is_skipped_by_later_comparisons(self):
+        everything = {case: final() for case in CASES}
+        self.add(0, self.run_folder("a", everything))
+        self.add(0, self.run_folder("b", everything))
+        self.add(1, self.run_folder("c", {case: final(accuracy=1.0) for case in CASES}))
+        with self.assertRaisesRegex(ValueError, "after stage 0"):
+            reject(0, "reason", self.registry)
+        with self.assertRaisesRegex(ValueError, "after stage 0"):
+            reject(2, "reason", self.registry)
+        with self.assertRaisesRegex(ValueError, "reason"):
+            reject(1, "  ", self.registry)
+        reject(1, "Accuracy fell", self.registry)
+        with self.assertRaisesRegex(ValueError, "already marked"):
+            reject(1, "again", self.registry)
+        # Stage 2 matches stage 0, so against stage 0 it is within noise; against dropped stage 1 it would look better
+        self.add(2, self.run_folder("d", everything))
+        with self.assertRaisesRegex(ValueError, "later stages"):
+            reject(1, "late", self.registry)
+        registry = json.loads(self.registry.read_text(encoding="utf-8"))
+        built = ladder(registry, self.root, labels=self.root / "absent.json")
+        self.assertEqual(built["comparisons"][1]["against"], 0)
+        self.assertTrue(built["comparisons"][1]["stop"])
+        self.assertEqual(built["comparisons"][2]["against"], 0)
+        self.assertEqual(built["comparisons"][2]["metrics"]["accuracy"]["verdict"], "within noise")
+        page = render(registry, built)
+        self.assertIn("Not adopted: Accuracy fell", page)
+        self.assertIn("Stage 0 → stage 2", page)
 
     def test_scores_folder_is_named_after_its_answers(self):
         judge = self.run_folder("a", {"C1": final(), "C2": final()}, answers="stage0_run-a_answers")

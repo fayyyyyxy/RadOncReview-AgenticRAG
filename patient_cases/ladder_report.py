@@ -22,11 +22,13 @@ EVALUATION_SET = ROOT / "data" / "processed" / "evaluation_set.json"
 # Stage -> (roadmap step, change); each stage adds one change to the previous one
 STAGES = {
     0: ("④", "Today's system, run twice"),
-    1: ("⑤", "Case tagging + evidence filtered by disease site"),
-    2: ("⑥", "Reference-list passages dropped"),
-    3: ("⑦", "Answer sections, rules (a)(e)(f), ≤ 8 passages, re-planning cap"),
-    4: ("⑧", "Re-irradiation pathway (A′)"),
-    5: ("⑨", "Past cases (B)"),
+    1: ("⑤", "Evidence filtered by the selected disease site"),
+    2: ("⑤a", "Review notes only: trial papers not searched"),
+    3: ("⑥", "Reference-list passages dropped (if trial papers stay)"),
+    4: ("⑦", "Answer sections, rules (a)(a′)(e)(f), ≤ 8 passages, re-planning cap"),
+    5: ("⑦a", "Code checks every citation against its passage"),
+    6: ("⑧", "Re-irradiation pathway (A′)"),
+    7: ("⑨", "Past cases (B)"),
 }
 # (key, label, direction): direction +1 means higher is better
 METRICS = (
@@ -184,9 +186,39 @@ def register(stage, judge_dir, registry_path=REGISTRY, inputs_path=EVALUATION_IN
         "stage": stage, "judge_run": judge_dir.name, "baseline_run": answers,
         "registered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     })
+    save(registry, registry_path)
+    return registry
+
+
+def reject(stage, reason, registry_path=REGISTRY):
+    """Mark a scored stage as not adopted: it stays in the report, but later stages build on the stage before it."""
+    registry = read_json(registry_path)
+    registered = {entry["stage"] for entry in registry["runs"]}
+    if stage == 0 or stage not in registered:
+        raise ValueError("Only a registered stage after stage 0 can be marked not adopted.")
+    # ⚠️ A later stage was built and compared on top of this one, so dropping it now would change that comparison
+    if any(later > stage for later in registered):
+        raise ValueError(f"Stage {stage} already has later stages built on it.")
+    if stage in not_adopted(registry):
+        raise ValueError(f"Stage {stage} is already marked not adopted.")
+    if not reason.strip():
+        raise ValueError("Give the reason the stage is not adopted.")
+    registry.setdefault("not_adopted", []).append({
+        "stage": stage, "reason": reason.strip(),
+        "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    })
+    save(registry, registry_path)
+    return registry
+
+
+def not_adopted(registry):
+    """Stage -> reason, for stages a decision dropped."""
+    return {entry["stage"]: entry["reason"] for entry in registry.get("not_adopted", [])}
+
+
+def save(registry, registry_path):
     Path(registry_path).parent.mkdir(parents=True, exist_ok=True)
     Path(registry_path).write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return registry
 
 
 def ladder(registry, outputs=OUTPUTS, labels=EVALUATION_SET):
@@ -201,12 +233,16 @@ def ladder(registry, outputs=OUTPUTS, labels=EVALUATION_SET):
     first, second = runs[0]
     thresholds = {**noise(first["values"], second["values"]),
                   **noise(first["answers"], second["answers"], (NO_ANSWER,))}
+    dropped = not_adopted(registry)
     comparisons = {}
     for stage in stages:
         if stage > 0:
-            scores = compare(stages[stage - 1], stages[stage], thresholds)
-            missing = compare(answers[stage - 1], answers[stage], thresholds, (NO_ANSWER,))
-            comparisons[stage] = {"cases": scores["cases"], "metrics": {**scores["metrics"], **missing["metrics"]},
+            # Each stage builds on the latest earlier stage that was kept; a dropped stage is still compared
+            base = max(s for s in stages if s < stage and s not in dropped)
+            scores = compare(stages[base], stages[stage], thresholds)
+            missing = compare(answers[base], answers[stage], thresholds, (NO_ANSWER,))
+            comparisons[stage] = {"against": base, "cases": scores["cases"],
+                                  "metrics": {**scores["metrics"], **missing["metrics"]},
                                   "stop": scores["stop"] or missing["stop"]}
     sites = {}
     for stage_runs in runs.values():
@@ -216,7 +252,7 @@ def ladder(registry, outputs=OUTPUTS, labels=EVALUATION_SET):
     if Path(labels).exists():
         sites.update({case["case_id"]: case["disease_site"] for case in read_json(labels)["cases"]})
     return {"runs": runs, "stages": stages, "answers": answers, "noise": thresholds,
-            "comparisons": comparisons, "sites": sites}
+            "comparisons": comparisons, "sites": sites, "not_adopted": dropped}
 
 
 COLORS = {"worse": "#c0392b", "better": "#1e8449", "within noise": "#34495e"}
@@ -271,11 +307,16 @@ def panel(key, label, direction, built):
     for value in stage0_means(built, key):
         parts.append(f'<circle cx="{x(0):.1f}" cy="{y(value):.1f}" r="3" class="run"/>')
     points = [(stage, stage_mean(stage)) for stage in sorted(built["stages"])]
-    parts.append('<polyline class="line" points="' + " ".join(f"{x(s):.1f},{y(v):.1f}" for s, v in points) + '"/>')
+    # The line follows the system as built, so it skips stages that were not adopted
+    path = [(s, v) for s, v in points if s not in built["not_adopted"]]
+    parts.append('<polyline class="line" points="' + " ".join(f"{x(s):.1f},{y(v):.1f}" for s, v in path) + '"/>')
     for stage, value in points:
         verdict = built["comparisons"][stage]["metrics"][key]["verdict"] if stage else "within noise"
-        parts.append(f'<circle cx="{x(stage):.1f}" cy="{y(value):.1f}" r="4.5" fill="{COLORS[verdict]}">'
-                     f'<title>Stage {stage}: {fmt(key, value)}, {verdict}</title></circle>')
+        dropped = stage in built["not_adopted"]
+        # A dropped stage keeps its verdict colour as an outline: still a result, but not part of the system
+        paint = f'fill="#fff" stroke="{COLORS[verdict]}" stroke-width="2"' if dropped else f'fill="{COLORS[verdict]}"'
+        parts.append(f'<circle cx="{x(stage):.1f}" cy="{y(value):.1f}" r="4.5" {paint}>'
+                     f'<title>Stage {stage}: {fmt(key, value)}, {verdict}{", not adopted" if dropped else ""}</title></circle>')
         if stage == 0:
             # Right of the point: the two hollow run dots sit above and below it
             parts.append(f'<text x="{x(0) + 8:.1f}" y="{y(value) + 4:.1f}" class="value">{fmt(key, value)}</text>')
@@ -288,8 +329,9 @@ def panel(key, label, direction, built):
 
 def change_table(built):
     later = sorted(built["comparisons"])
+    status = lambda s: f"vs stage {built['comparisons'][s]['against']}" + (" · not adopted" if s in built["not_adopted"] else "")
     head = ("<tr><th>Metric</th><th>Stage 0 run a</th><th>Run b</th><th>Noise</th>"
-            + "".join(f"<th>Stage {stage}</th>" for stage in later) + "</tr>")
+            + "".join(f"<th>Stage {stage}<br><small>{status(stage)}</small></th>" for stage in later) + "</tr>")
     rows = []
     for key, label, direction in ALL_METRICS:
         first, second = stage0_means(built, key)
@@ -300,7 +342,8 @@ def change_table(built):
                          f'<small>({fmt_delta(key, m["delta"])})</small><br><small>{m["verdict"]}</small></td>')
         better = "higher" if direction > 0 else "lower"
         rows.append(f"<tr><th>{escape(label)}<br><small>{better} is better</small></th>{''.join(cells)}</tr>")
-    decision = "".join(f"<td><strong>{'STOP' if built['comparisons'][s]['stop'] else 'continue'}</strong></td>" for s in later)
+    decision = "".join(f"<td><strong>{'STOP' if built['comparisons'][s]['stop'] else 'continue'}</strong>"
+                       + ("<br><small>not adopted</small>" if s in built["not_adopted"] else "") + "</td>" for s in later)
     rows.append(f'<tr><th>Decision</th><td colspan="3"></td>{decision}</tr>')
     return f'<table class="changes">{head}{"".join(rows)}</table>'
 
@@ -317,7 +360,10 @@ def case_changes(before, after):
 
 def change_lists(built):
     pairs = [("Stage 0, run a → run b", built["runs"][0][0]["values"], built["runs"][0][1]["values"])]
-    pairs += [(f"Stage {s - 1} → stage {s}", built["stages"][s - 1], built["stages"][s]) for s in sorted(built["comparisons"])]
+    for s in sorted(built["comparisons"]):
+        base = built["comparisons"][s]["against"]
+        title = f"Stage {base} → stage {s}" + (" (not adopted)" if s in built["not_adopted"] else "")
+        pairs.append((title, built["stages"][base], built["stages"][s]))
     items = []
     for title, before, after in pairs:
         moved, gained, lost = (escape(", ".join(ids) or "none") for ids in case_changes(before, after))
@@ -349,12 +395,14 @@ def heatmap(built):
             mark = '<sup>H</sup>' if value["harm_2plus"] else ""
             cells.append(f'<td style="background:hsl({hue:.0f},65%,82%)">{value["accuracy"]:g}{mark}</td>')
         rows.append(f"<tr><th>{escape(case)}</th>{''.join(cells)}</tr>")
-    head = "".join(f"<th>{name}</th>" for name, _ in columns)
+    head = "".join(f'<th class="dropped" title="Not adopted">{name}</th>' if name.isdigit() and int(name) in built["not_adopted"]
+                   else f"<th>{name}</th>" for name, _ in columns)
     return f'<table class="heat"><tr><th>Case</th>{head}</tr>{"".join(rows)}</table>'
 
 
 def runs_table(registry, built):
     by_name = {run["name"]: run for runs in built["runs"].values() for run in runs}
+    dropped = built["not_adopted"]
     rows = []
     for entry in registry["runs"]:
         run, (step, change) = by_name[entry["judge_run"]], STAGES[entry["stage"]]
@@ -364,9 +412,11 @@ def runs_table(registry, built):
         rows.append(f"<tr><td>{entry['stage']}</td><td>{step}</td><td>{escape(change)}</td>"
                     f"<td><code>{escape(entry['baseline_run'])}</code></td><td><code>{escape(entry['judge_run'])}</code></td>"
                     f"<td>{len(run['values'])}</td><td>{escape(', '.join(missing)) or '–'}</td>"
-                    f"<td>{escape(', '.join(run['errors'])) or '–'}</td><td>{tokens}</td></tr>")
+                    f"<td>{escape(', '.join(run['errors'])) or '–'}</td><td>{tokens}</td>"
+                    f"<td>{'Not adopted: ' + escape(dropped[entry['stage']]) if entry['stage'] in dropped else '–'}</td></tr>")
     return ("<table><tr><th>Stage</th><th>Roadmap</th><th>Change</th><th>Answers</th><th>Judge run</th>"
-            "<th>Scored</th><th>No answer</th><th>Judge errors</th><th>Judge tokens in / out</th></tr>" + "".join(rows) + "</table>")
+            "<th>Scored</th><th>No answer</th><th>Judge errors</th><th>Judge tokens in / out</th><th>Decision</th></tr>"
+            + "".join(rows) + "</table>")
 
 
 PAGE_TEMPLATE = """<!doctype html>
@@ -401,6 +451,7 @@ PAGE_TEMPLATE = """<!doctype html>
   .heat tr.site th {{ background: #f0f0f2; }}
   .heat td.missing {{ color: #b0b0b5; }}
   .heat td.noanswer {{ background: #2c2c2e; color: #fff; }}
+  .heat th.dropped {{ text-decoration: line-through; color: #8a8a8f; }}
   sup {{ color: #c0392b; font-weight: 700; }}
   ul.cases li {{ margin-bottom: 8px; font-size: 13px; }}
 </style>
@@ -419,7 +470,8 @@ PAGE_TEMPLATE = """<!doctype html>
   <p>Noise for each metric is twice the standard error of the per-case difference between the two stage-0 runs,
   but never less than the gap between the two runs' means, or one case's worth (1 / number of cases). A stage that falls below the previous stage by more than the
   noise on any metric is <strong>worse</strong>, and the decision is <strong>STOP</strong>: find the cause before the
-  next stage. Stage 1 is compared with the case-by-case average of the two stage-0 runs. Rubric metrics use the
+  next stage, or mark the stage <em>not adopted</em>. Each stage is compared with the latest earlier stage that was
+  kept, and stage 0 stands for the case-by-case average of its two runs. Rubric metrics use the
   cases scored in both stages; <em>No answer</em> counts every evaluation case, so a stage cannot look better by
   failing to answer hard cases.</p>
 </section>
@@ -428,7 +480,7 @@ PAGE_TEMPLATE = """<!doctype html>
   <div class="panels">{panels}</div>
   <p class="note">Grey band: stage-0 average ± noise. Hollow dots: the two stage-0 runs. Point colour against the
   previous stage: <span style="color:#c0392b">red worse</span>, <span style="color:#1e8449">green better</span>,
-  dark grey within noise.</p>
+  dark grey within noise. Hollow coloured dots: stages not adopted, which the line skips.</p>
 </section>
 <section>
   <h2>Change against the previous stage</h2>
@@ -438,7 +490,7 @@ PAGE_TEMPLATE = """<!doctype html>
 <section>
   <h2>Accuracy by case</h2>
   <p class="note">Cell colour runs from red (1) to green (5). <sup>H</sup> marks Harm ≥ 2, ✕ no answer generated,
-  – not judged. Columns 0a and 0b are the two stage-0 runs.</p>
+  – not judged. Columns 0a and 0b are the two stage-0 runs; struck-through columns were not adopted.</p>
   {heatmap}
 </section>
 </main>
@@ -464,12 +516,18 @@ def main(argv=None):
     add = commands.add_parser("add", help="Register a judge run for a stage, then rebuild the report.")
     add.add_argument("stage", type=int)
     add.add_argument("judge_run", type=Path, help="Judge output folder, e.g. outputs/judge_<id>")
+    drop = commands.add_parser("reject", help="Mark a stage not adopted, then rebuild the report.")
+    drop.add_argument("stage", type=int)
+    drop.add_argument("--reason", required=True, help="Why the stage is not adopted; shown in the report.")
     commands.add_parser("build", help="Rebuild the report from the registry.")
     args = parser.parse_args(argv)
     try:
         if args.command == "add":
             registry = register(args.stage, args.judge_run)
             print(f"Registered {args.judge_run.name} as stage {args.stage}.")
+        elif args.command == "reject":
+            registry = reject(args.stage, args.reason)
+            print(f"Stage {args.stage} marked not adopted; later stages build on the stage before it.")
         else:
             registry = read_json(REGISTRY)
         if sum(entry["stage"] == 0 for entry in registry["runs"]) < 2:
