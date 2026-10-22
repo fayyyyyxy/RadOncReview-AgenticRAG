@@ -16,6 +16,7 @@ from .query_analyzer import QueryAnalyzer
 from .task_planner import TaskPlanner
 from .retriever import RetrieverManager, MockRetrieverManager
 from .synthesizer import ResponseSynthesizer, SelfCritic
+from .citation_check import CitationChecker, cited
 from .guardrails import GuardrailManager
 from .case_labels import CaseLabels
 from .site_routing import EvidenceScope, scope_for, table_fingerprint
@@ -69,6 +70,7 @@ class AgenticRAGEngine:
 
         self.synthesizer = ResponseSynthesizer(self.llm, self.config)
         self.self_critic = SelfCritic(self.llm, self.config.agent)
+        self.citation_checker = CitationChecker(self.llm)
         self.guardrails = GuardrailManager(self.config.guardrail)
 
         # State
@@ -419,6 +421,21 @@ class AgenticRAGEngine:
                 confidence = (confidence + critique.confidence_score) / 2
                 plan = improved_plan
 
+        # ========== Step 6b: Citation Check ==========
+        # After any retry, so the final answer is the one checked
+        citation_check = None
+        if self.config.features.citation_check:
+            self._log_reasoning("CHECK", "Checking each citation against its passage")
+            answer, citation_check = self.citation_checker.check(answer, context_passages)
+            # Only citations still in the answer stay in the source list
+            remaining = cited(answer)
+            citations = [c for c in citations if c.citation_id in remaining]
+            self._log_reasoning("CHECK",
+                f"Removed {citation_check['removed']} of {citation_check['citations']} citations, "
+                f"{citation_check['unchecked']} unchecked"
+                + (f", check failed: {citation_check['error']}" if citation_check["error"] else "")
+            )
+
         # ========== Step 7: Output Guardrails ==========
         self._log_reasoning("GUARDRAIL", "Checking output safety")
         final_answer, output_check = self.guardrails.process_output(answer)
@@ -474,6 +491,8 @@ class AgenticRAGEngine:
             },
             latency_ms=latency_ms
         )
+        if citation_check is not None:
+            response.metadata["citation_check"] = citation_check
 
         # ========== Step 8: LLM Judge Evaluation ==========
         if self.enable_judge:

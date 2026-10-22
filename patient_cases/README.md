@@ -126,6 +126,23 @@ provided; rerunning creates a new folder and can incur charges again.
 After reviewing the first case, use --execute --limit 10 for the full
 development subset. Locked-test evaluation is outside this runner's scope.
 
+### Citation check
+
+```bash
+python patient_cases/run_baseline.py --execute --citation-check
+```
+
+--citation-check adds a step after the answer is written (core/citation_check.py;
+off by default, so the web app is unchanged). One more LLM call per answer asks,
+for each sentence and each passage it cites, whether the passage states what
+the sentence says, numbers included. A rejected citation is removed and the
+sentence stays; sentences that lost a citation are listed in the response
+metadata (citation_check) for an interface to mark. A note written into the
+answer text instead lowered judged completeness and guideline adherence.
+Brackets such as [4, 5] are checked one number at a time and rewritten as
+[4] [5]. An unparseable reply is retried once with the error; if it fails
+again, the answer is left unchanged and the error is recorded.
+
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
 attending plan separate for review. Later, development attending plans may be
