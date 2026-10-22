@@ -15,6 +15,9 @@ from .case_labels import NOT_SPECIFIED, CaseLabels, prior_rt_group
 
 
 LABEL = "Institutional example – not evidence"
+# Set on development cases (patient_cases/check_past_case_quality.py): 0.50 drops examples for 8 of 363 queries and
+# keeps 75.5% of them with an example of the same technique (76.2% with no floor); 0.55 would drop 26
+MIN_SIMILARITY = 0.50
 # Every record carries these; other fields are payload shown with the example
 KEYS = ("case_id", "patient_id", "disease_site", "setting_group", "prior_rt_group", "encounter_type")
 
@@ -40,6 +43,11 @@ class PastCaseIndex(ABC):
     @abstractmethod
     def version(self) -> str:
         """An identifier that changes whenever the indexed content changes."""
+
+
+def search_text(vignette: str, clinical_question: str) -> str:
+    """The text a case is embedded by; a new case must be embedded the same way as the indexed ones."""
+    return f"{vignette}\n\n{clinical_question}"
 
 
 def normalise(vectors) -> np.ndarray:

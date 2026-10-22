@@ -185,3 +185,35 @@ counts rule violations, and writes outputs/past_cases_check/review.html: a
 seeded sample of cases outside the evaluation set beside their chosen
 examples. The page holds clinical text; keep it local. --min-similarity writes
 to its own folder.
+
+### Selection quality
+
+```bash
+python patient_cases/check_past_case_quality.py
+python patient_cases/check_past_case_quality.py --split evaluation
+```
+
+Selection never sees the attending plan, so the plan grades it: does a chosen
+example share the query's technique, or one of the dose regimens (total dose
+and number of fractions) parsed from its plan? Four ways of choosing are
+compared: same site or all labels, each in random or similarity order, with
+95% intervals that resample patients rather than encounters. The development
+run searches only cases outside the evaluation set and also reports match rate
+by similarity and a sweep of similarity floors; the floor in core/past_cases.py
+(MIN_SIMILARITY) was set from it. The evaluation run reports on the 40
+evaluation cases against the whole index. Outputs hold metrics only.
+
+### Finding similar cases
+
+```bash
+python patient_cases/find_similar_cases.py --case-id BR-003
+python patient_cases/find_similar_cases.py --input path/to/new_case.json
+```
+
+--case-id uses an indexed case's stored vector and labels and excludes that
+case and its patient; it makes no model call. --input reads a JSON file with
+"vignette", "clinical_question" and any of the four labels (missing means Not
+specified) and embeds it with Titan v2; it refuses to run if the configured
+embedding model differs from the one the index was built with. Both write a
+local page to outputs/similar_cases/ with up to two examples, each labelled as
+an institutional example and not evidence. Keep case files and pages local.
