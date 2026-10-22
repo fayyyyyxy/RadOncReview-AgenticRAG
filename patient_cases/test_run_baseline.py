@@ -1,5 +1,7 @@
 """Baseline input isolation and per-case error checks without AWS."""
 
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -50,6 +52,16 @@ class BaselineTests(unittest.TestCase):
                 self.assertEqual(main(["--name", "stage 1"]), 1)
                 self.assertEqual(main(["--name", "stage1"]), 1)
                 load.assert_not_called()
+
+    def test_dry_run_reports_which_evidence_sources_are_on(self):
+        def dry_run(*flags):
+            out = io.StringIO()
+            with patch("run_baseline.load_inputs", return_value=[self.input]), \
+                 patch("run_baseline.labels_for", return_value={}), redirect_stdout(out):
+                self.assertEqual(main(list(flags)), 0)
+            return json.loads(out.getvalue())
+        self.assertTrue(dry_run()["trial_papers"])
+        self.assertFalse(dry_run("--no-trial-papers")["trial_papers"])
 
     def test_workbook_labels_reach_the_engine_but_not_the_query(self):
         rows = [{**record("D1", "P1"), "Disease Site": "Breast", "Setting": "Consolidative",
