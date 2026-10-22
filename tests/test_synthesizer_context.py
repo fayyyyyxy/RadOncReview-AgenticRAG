@@ -50,7 +50,8 @@ class SynthesizerContextTests(unittest.TestCase):
         synth, _ = self.synthesizer("Synthetic fact [1].")
         _, citations, _, passages = synth.synthesize("Synthetic question", self.analysis, None, [chunk(long_text)])
 
-        self.assertEqual(passages, [{"citation_id": 1, "source_path": chunk(long_text)["path"], "text": long_text}])
+        self.assertEqual(passages, [{"citation_id": 1, "source_path": chunk(long_text)["path"], "text": long_text,
+                                     "source_type": "review_notes", "category": ""}])
         self.assertEqual(citations[0].chunk_text, long_text[:500])
 
     def test_no_chunks_records_no_passages(self):

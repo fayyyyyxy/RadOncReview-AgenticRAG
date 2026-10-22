@@ -70,7 +70,10 @@ Guidelines for your responses:
                 source_type=source_type
             ))
             # Full text, unlike chunk_text, so evaluators see exactly what the LLM saw
-            passages.append({"citation_id": citation_id, "source_path": path, "text": text})
+            # Category lets a check confirm each passage came from the selected site's evidence
+            passages.append({"citation_id": citation_id, "source_path": path, "text": text,
+                             "source_type": chunk.get("source_type", "review_notes"),
+                             "category": chunk.get("category", "")})
 
         context = "\n---\n".join(context_parts)
         return context, citations, passages

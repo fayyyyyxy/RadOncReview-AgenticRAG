@@ -17,6 +17,8 @@ from .task_planner import TaskPlanner
 from .retriever import RetrieverManager, MockRetrieverManager
 from .synthesizer import ResponseSynthesizer, SelfCritic
 from .guardrails import GuardrailManager
+from .case_labels import CaseLabels
+from .site_routing import EvidenceScope, scope_for, table_fingerprint
 
 
 class AgenticRAGEngine:
@@ -269,12 +271,13 @@ class AgenticRAGEngine:
         return citations
 
 
-    def query(self, user_query: str) -> AgentResponse:
+    def query(self, user_query: str, labels: Optional[CaseLabels] = None) -> AgentResponse:
         """
         Process a user query through the agentic RAG pipeline.
 
         Args:
             user_query: The user's clinical question.
+            labels: Case labels selected by the user; used only when a feature switch asks for them.
 
         Returns:
             AgentResponse with answer, citations, confidence, and reasoning trace.
@@ -326,13 +329,17 @@ class AgenticRAGEngine:
         )
 
         # ========== Step 4: Execute Retrieval Tasks ==========
+        labels = labels or CaseLabels()
+        scope = scope_for(labels.disease_site) if self.config.features.site_filter else EvidenceScope()
+        if scope != EvidenceScope():
+            self._log_reasoning("ROUTE", f"Evidence limited to {labels.disease_site}")
         self._log_reasoning("RETRIEVE", "Executing retrieval tasks")
 
         for task in plan.sub_tasks:
             self._log_reasoning("RETRIEVE",
                 f"Task '{task.description}' using {task.retrieval_strategy.value}"
             )
-            self.retriever.execute_task(task)
+            self.retriever.execute_task(task, scope)
             self._log_reasoning("RETRIEVE", f"Result: {task.result}")
 
         # Collect chunks differently based on query type
@@ -393,7 +400,8 @@ class AgenticRAGEngine:
                 # Re-execute new tasks
                 for task in improved_plan.sub_tasks:
                     if task.status == TaskStatus.PENDING:
-                        self.retriever.execute_task(task)
+                        # ⚠️ The retry must keep the scope, or re-planned tasks would reach other sites
+                        self.retriever.execute_task(task, scope)
 
                 # Re-synthesize — use same path as first attempt based on query type
                 if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
@@ -440,6 +448,15 @@ class AgenticRAGEngine:
             self_critique=critique,
             task_plan=plan,
             context_passages=context_passages,
+            routing={
+                "labels": vars(labels),
+                "site_filter": self.config.features.site_filter,
+                "review_note_categories": sorted(scope.review_note_categories)
+                if scope.review_note_categories is not None else None,
+                "trial_paper_folders": sorted(scope.trial_paper_folders)
+                if scope.trial_paper_folders is not None else None,
+                "site_table": table_fingerprint(),
+            },
             metadata={
                 "analysis": {
                     "intent": analysis.intent.value,

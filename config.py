@@ -105,6 +105,12 @@ class GuardrailConfig:
 
 
 @dataclass
+class FeatureConfig:
+    """Switches for evaluated changes; all off by default, so the web app keeps today's behaviour."""
+    site_filter: bool = False  # limit evidence to the user-selected disease site (core/site_routing.py)
+
+
+@dataclass
 class Config:
     """Main configuration container."""
     aws: AWSConfig = field(default_factory=AWSConfig)
@@ -113,6 +119,7 @@ class Config:
     retriever: RetrieverConfig = field(default_factory=RetrieverConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     guardrail: GuardrailConfig = field(default_factory=GuardrailConfig)
+    features: FeatureConfig = field(default_factory=FeatureConfig)
 
 
 # Default configuration instance

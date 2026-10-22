@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from load_scenarios import QUESTION, VIGNETTE
-from run_baseline import load_inputs, main, make_query, run_case
+from run_baseline import labels_for, load_inputs, main, make_query, run_case
 from test_load_scenarios import record
 
 
@@ -51,12 +51,33 @@ class BaselineTests(unittest.TestCase):
                 self.assertEqual(main(["--name", "stage1"]), 1)
                 load.assert_not_called()
 
+    def test_workbook_labels_reach_the_engine_but_not_the_query(self):
+        rows = [{**record("D1", "P1"), "Disease Site": "Breast", "Setting": "Consolidative",
+                 "Prior RT": "None", "Encounter Type": "Boost"}]
+        with patch("run_baseline.read_records", return_value=rows):
+            labels = labels_for(["D1"], Path("unused.xlsx"))["D1"]
+        self.assertEqual((labels.disease_site, labels.setting_group), ("Breast", "Definitive"))
+        seen = {}
+
+        class Engine:
+            def reset_conversation(self):
+                pass
+
+            def query(self, query, labels=None):
+                seen.update(query=query, labels=labels)
+                raise RuntimeError("stop after the call")
+
+        result = run_case(Engine(), self.input, 2000, labels)
+        self.assertIs(seen["labels"], labels)
+        self.assertNotIn("Breast", seen["query"])
+        self.assertEqual(result["case_labels"]["encounter_type"], "Boost")
+
     def test_engine_failure_is_recorded(self):
         class FailingEngine:
             def reset_conversation(self):
                 pass
 
-            def query(self, query):
+            def query(self, query, labels=None):
                 raise RuntimeError("Synthetic failure")
 
         result = run_case(FailingEngine(), self.input, 2000)

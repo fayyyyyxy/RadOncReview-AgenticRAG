@@ -20,6 +20,7 @@ REPO = ROOT.parent
 sys.path.insert(0, str(REPO))
 
 from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, read_records, validate_records
+from core.case_labels import SETTING_GROUPS, CaseLabels
 
 # Model for every engine LLM call in evaluation runs. Llama 3 70B's 8k context overflowed on
 # long evidence; the web app keeps config.py's default until a site is declared GO.
@@ -55,6 +56,20 @@ def load_inputs(path, workbook):
     return inputs
 
 
+def labels_for(case_ids, workbook):
+    """Workbook labels standing in for a physician's drop-down choices; they never enter the query text."""
+    records = {r["Case ID"]: r for r in read_records(workbook)}
+    return {
+        case_id: CaseLabels(
+            disease_site=records[case_id]["Disease Site"],
+            setting_group=SETTING_GROUPS[records[case_id]["Setting"]],
+            prior_rt=records[case_id]["Prior RT"],
+            encounter_type=records[case_id]["Encounter Type"],
+        )
+        for case_id in case_ids
+    }
+
+
 def json_value(value):
     if is_dataclass(value):
         return asdict(value)
@@ -65,10 +80,11 @@ def json_value(value):
     raise TypeError(f"Unsupported output type: {type(value).__name__}")
 
 
-def run_case(engine, item, max_length):
+def run_case(engine, item, max_length, labels=None):
     """Save blocked/error cases explicitly; never truncate clinical input."""
     query = make_query(item)
-    result = {"case_id": item["case_id"], "query": query}
+    labels = labels or CaseLabels()
+    result = {"case_id": item["case_id"], "query": query, "case_labels": vars(labels)}
     if len(query) > max_length:
         return {**result, "status": "skipped_input_too_long", "characters": len(query), "limit": max_length}
     started = time.monotonic()
@@ -76,7 +92,7 @@ def run_case(engine, item, max_length):
     try:
         engine.reset_conversation()
         with redirect_stdout(log), redirect_stderr(log):
-            response = engine.query(query)
+            response = engine.query(query, labels)
         retrieval = response.metadata.get("retrieval", {})
         status = "response_generated"
         if not retrieval:
@@ -103,6 +119,7 @@ def main(argv=None):
     parser.add_argument("--execute", action="store_true", help="Make real AWS retrieval and paid model calls.")
     parser.add_argument("--judge", action="store_true", help="Enable additional paid LLM judge calls.")
     parser.add_argument("--name", help="Readable run name such as stage1; answers go to outputs/<name>_answers.")
+    parser.add_argument("--site-filter", action="store_true", help="Limit evidence to each case's disease site.")
     args = parser.parse_args(argv)
     try:
         if args.name is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", args.name):
@@ -115,10 +132,11 @@ def main(argv=None):
         if not 1 <= args.limit <= len(inputs):
             raise ValueError(f"--limit must be between 1 and {len(inputs)}.")
         selected = inputs[:args.limit]
+        labels = labels_for([r["case_id"] for r in selected], args.workbook)
         # No engine import, model download or AWS calls in dry-run mode.
         if not args.execute:
             print(json.dumps({
-                "mode": "dry_run", "aws_calls": 0, "model": args.model,
+                "mode": "dry_run", "aws_calls": 0, "model": args.model, "site_filter": args.site_filter,
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
                 "selected": [{"case_id": r["case_id"], "query_characters": len(make_query(r))} for r in selected],
@@ -133,6 +151,7 @@ def main(argv=None):
         config.llm.temperature = 0.0
         # ⚠️ One shared client serves the analyzer, planner, writer and self-critique, so all of them switch
         config.llm.model_id = args.model
+        config.features.site_filter = args.site_filter
         # Log all settings, including the opt-in judge difference from the web app.
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
         changes = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True, text=True)
@@ -156,7 +175,7 @@ def main(argv=None):
             with (output / "startup.log").open("w", encoding="utf-8") as log, redirect_stdout(log), redirect_stderr(log):
                 engine = AgenticRAGEngine(config=config, enable_judge=args.judge)
             for item in selected:
-                result = run_case(engine, item, config.guardrail.max_input_length)
+                result = run_case(engine, item, config.guardrail.max_input_length, labels[item["case_id"]])
                 with (output / "results.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(result, ensure_ascii=False, default=json_value) + "\n")
                 statuses.append(result["status"])

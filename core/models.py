@@ -133,6 +133,8 @@ class AgentResponse:
     created_at: datetime = field(default_factory=datetime.now)
     # Numbered passages the synthesizer was given; kept out of metadata so the API payload is unchanged
     context_passages: List[Dict[str, Any]] = field(default_factory=list)
+    # Case labels and the evidence scope they produced; also outside metadata, for the same reason
+    routing: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

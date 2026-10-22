@@ -12,6 +12,7 @@ from collections import Counter
 from sentence_transformers import CrossEncoder
 
 from .models import RetrievedChunk, SubTask, RetrievalStrategy, TaskStatus
+from .site_routing import EvidenceScope
 from config import RetrieverConfig, EmbeddingConfig, AWSConfig, create_boto3_session
 
 
@@ -98,6 +99,7 @@ class RetrieverManager:
         # FAISS index (loaded lazily)
         self._faiss_index = None
         self._faiss_index_loaded = False
+        self._ids_by_category = None
 
         # Cross-Encoder for reranking
         self._cross_encoder = CrossEncoderReranker(preload=True)
@@ -107,10 +109,14 @@ class RetrieverManager:
     def retrieve_from_knowledge_base(
         self,
         query: str,
-        top_k: int = 10
+        top_k: int = 10,
+        folders: Optional[frozenset] = None
     ) -> List[RetrievedChunk]:
-        """Retrieve from Bedrock Knowledge Base (reading list PDFs/docs in S3)."""
-        if not self.kb_enabled:
+        """Retrieve from Bedrock Knowledge Base (reading list PDFs/docs in S3).
+
+        folders limits results to reading-lists/<folder>/ documents; an empty set retrieves nothing.
+        """
+        if not self.kb_enabled or folders == frozenset():
             return []
         try:
             retrieval_config = {
@@ -121,13 +127,27 @@ class RetrieverManager:
             }
 
             # Filter to specific data source if configured — leave empty to search all
+            conditions = []
             if self.aws_config.knowledge_base_datasource_id:
-                retrieval_config["vectorSearchConfiguration"]["filter"] = {
+                conditions.append({
                     "equals": {
                         "key": "x-amz-bedrock-kb-data-source-id",
                         "value": self.aws_config.knowledge_base_datasource_id
                     }
-                }
+                })
+            if folders:
+                # Prefix match on the S3 path, verified on this Knowledge Base on 2026-10-21
+                prefixes = [
+                    {"startsWith": {"key": "x-amz-bedrock-kb-source-uri",
+                                    "value": f"s3://{self.aws_config.s3_bucket}/reading-lists/{folder}/"}}
+                    for folder in sorted(folders)
+                ]
+                conditions.append(prefixes[0] if len(prefixes) == 1 else {"orAll": prefixes})
+            if conditions:
+                # ⚠️ andAll needs at least two conditions, so a single one is passed on its own
+                retrieval_config["vectorSearchConfiguration"]["filter"] = (
+                    conditions[0] if len(conditions) == 1 else {"andAll": conditions}
+                )
 
             response = self.bedrock_agent.retrieve(
                 knowledgeBaseId=self.kb_id,
@@ -238,16 +258,49 @@ class RetrieverManager:
                 return float(obj)
         return obj
 
-    def dense_search(self, query: str, top_k: Optional[int] = None) -> List[RetrievedChunk]:
-        """Perform dense (vector similarity) search."""
+    def _category_ids(self) -> Dict[str, np.ndarray]:
+        """FAISS IDs of each review-note category, read once from DynamoDB (FAISS_ID and category only)."""
+        if self._ids_by_category is None:
+            ids_by_category: Dict[str, List[int]] = {}
+            kwargs = {"ProjectionExpression": "FAISS_ID, category"}
+            while True:
+                page = self.table.scan(**kwargs)
+                for item in page["Items"]:
+                    ids_by_category.setdefault(item.get("category", ""), []).append(int(item["FAISS_ID"]))
+                if "LastEvaluatedKey" not in page:
+                    break
+                kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+            self._ids_by_category = {c: np.array(ids, dtype="int64") for c, ids in ids_by_category.items()}
+        return self._ids_by_category
+
+    def dense_search(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        categories: Optional[frozenset] = None
+    ) -> List[RetrievedChunk]:
+        """Perform dense (vector similarity) search.
+
+        categories limits the search to review notes of those categories; an empty set retrieves nothing.
+        """
         top_k = top_k or self.config.top_k
+
+        params = None
+        if categories is not None:
+            ids_by_category = self._category_ids()
+            allowed = [ids_by_category[c] for c in categories if c in ids_by_category]
+            if not allowed:
+                return []
+            # 💡 The index is exact (IndexFlatIP), so searching only these IDs needs no over-fetching:
+            # a rare category such as Sarcoma (2% of notes) still gets its true top k
+            params = faiss.SearchParameters(sel=faiss.IDSelectorBatch(np.concatenate(allowed)))
 
         # Get query embedding
         query_embedding = self._get_embedding(query)
 
         # Search FAISS index
         index = self._load_faiss_index()
-        distances, indices = index.search(query_embedding.reshape(1, -1), top_k)
+        distances, indices = index.search(query_embedding.reshape(1, -1), top_k, params=params)
 
         # Filter by similarity threshold
         valid_results = [
@@ -424,9 +477,10 @@ class RetrieverManager:
 
         return list(set(keywords))
 
-    def execute_task(self, task: SubTask) -> SubTask:
-        """Execute a retrieval task and update its status."""
+    def execute_task(self, task: SubTask, scope: Optional[EvidenceScope] = None) -> SubTask:
+        """Execute a retrieval task and update its status; scope limits evidence to one disease site."""
         task.status = TaskStatus.IN_PROGRESS
+        scope = scope or EvidenceScope()
 
         # Use task-specific top_k if provided, otherwise use default
         top_k = task.top_k if task.top_k else None
@@ -434,7 +488,7 @@ class RetrieverManager:
         try:
             # Select retrieval method based on strategy
             if task.retrieval_strategy == RetrievalStrategy.DENSE:
-                chunks = self.dense_search(task.query, top_k=top_k)
+                chunks = self.dense_search(task.query, top_k=top_k, categories=scope.review_note_categories)
             elif task.retrieval_strategy == RetrievalStrategy.SPARSE:
                 chunks = self.sparse_search(task.query, top_k=top_k)
             elif task.retrieval_strategy == RetrievalStrategy.HYBRID:
@@ -452,11 +506,15 @@ class RetrieverManager:
             elif task.retrieval_strategy == RetrievalStrategy.KNOWLEDGE_BASE:
                 chunks = self.retrieve_from_knowledge_base(
                     task.query,
-                    top_k=top_k or self.config.top_k
+                    top_k=top_k or self.config.top_k,
+                    folders=scope.trial_paper_folders
                 )
             else:
                 # Fallback
                 chunks = self.dense_search(task.query, top_k=top_k)
+
+            # Every strategy ends here, so this also scopes the sparse, hybrid and multi-hop searches
+            chunks = [c for c in chunks if scope.allows({"source_type": c.source_type, "category": c.category})]
 
             # Store results in task
             task.retrieved_chunks = [
@@ -529,7 +587,7 @@ class MockRetrieverManager:
     def hybrid_search(self, query: str, top_k: int = 10) -> List[RetrievedChunk]:
         return self.dense_search(query, top_k)
 
-    def execute_task(self, task: SubTask) -> SubTask:
+    def execute_task(self, task: SubTask, scope: Optional[EvidenceScope] = None) -> SubTask:
         task.status = TaskStatus.COMPLETED
         task.retrieved_chunks = [{"text": "Mock result", "path": "Mock > Path"}]
         task.result = "Mock retrieval completed"
