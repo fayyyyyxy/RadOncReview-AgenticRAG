@@ -118,7 +118,7 @@ def main(argv=None):
     parser.add_argument("--model", default=WRITER_MODEL, help="Bedrock model ID for every engine LLM call.")
     parser.add_argument("--execute", action="store_true", help="Make real AWS retrieval and paid model calls.")
     parser.add_argument("--judge", action="store_true", help="Enable additional paid LLM judge calls.")
-    parser.add_argument("--name", help="Readable run name such as stage1; answers go to outputs/<name>_answers.")
+    parser.add_argument("--name", help="Readable run name such as site-filter; answers go to outputs/<name>_answers.")
     parser.add_argument("--site-filter", action="store_true", help="Limit evidence to each case's disease site.")
     parser.add_argument("--no-trial-papers", action="store_true", help="Search review notes only, not the trial-paper Knowledge Base.")
     args = parser.parse_args(argv)

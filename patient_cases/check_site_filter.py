@@ -38,7 +38,7 @@ def check_case(result):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run", type=Path, help="Answers folder, e.g. outputs/stage1_answers")
+    parser.add_argument("run", type=Path, help="Answers folder, e.g. outputs/site-filter_answers")
     args = parser.parse_args(argv)
     try:
         lines = (args.run / "results.jsonl").read_text(encoding="utf-8").splitlines()
