@@ -3,6 +3,7 @@ Agentic RAG Engine: Main agent that orchestrates all components.
 """
 import time
 import uuid
+from dataclasses import replace
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 
@@ -91,11 +92,7 @@ class AgenticRAGEngine:
         for task in plan.sub_tasks:
             if task.status == TaskStatus.COMPLETED:
                 for chunk in task.retrieved_chunks:
-                    source_type = chunk.get("source_type", "review_notes")
-                    if source_type == "clinical_trial":
-                        chunk_id = f"{chunk.get('s3_location', '')}_{chunk.get('text', '')[:100]}"
-                    else:
-                        chunk_id = chunk.get("faiss_id")
+                    chunk_id = self._chunk_key(chunk)
                     if chunk_id not in seen_ids:
                         all_chunks.append(chunk)
                         seen_ids.add(chunk_id)
@@ -187,11 +184,7 @@ class AgenticRAGEngine:
         for topic_key, data in chunks_by_topic.items():
             deduped = []
             for chunk in data["chunks"]:
-                source_type = chunk.get("source_type", "review_notes")
-                if source_type == "clinical_trial":
-                    chunk_id = f"{chunk.get('s3_location', '')}_{chunk.get('text', '')[:100]}"
-                else:
-                    chunk_id = chunk.get("faiss_id")
+                chunk_id = self._chunk_key(chunk)
                 if chunk_id not in all_seen_ids:
                     deduped.append(chunk)
                     all_seen_ids.add(chunk_id)
@@ -253,6 +246,30 @@ class AgenticRAGEngine:
             reranked_by_topic[topic_key] = final_chunks
 
         return reranked_by_topic
+
+    @staticmethod
+    def _chunk_key(chunk: Dict) -> Any:
+        """One identity per passage; trial-paper chunks have no FAISS id, so their file and opening text stand in."""
+        if chunk.get("source_type", "review_notes") == "clinical_trial":
+            return f"{chunk.get('s3_location', '')}_{chunk.get('text', '')[:100]}"
+        return chunk.get("faiss_id")
+
+    def _merge_chunks(self, first: List[Dict], added: List[Dict]) -> List[Dict]:
+        """The first round's passages in their order, then the added ones they do not already include."""
+        seen = {self._chunk_key(c) for c in first}
+        return first + [c for c in added if self._chunk_key(c) not in seen]
+
+    def _merge_topics(self, first: Dict[str, List[Dict]], added: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
+        """The first round's topics, then each added topic's passages that no earlier topic includes."""
+        merged = {topic: list(chunks) for topic, chunks in first.items()}
+        seen = {self._chunk_key(c) for chunks in first.values() for c in chunks}
+        for topic, chunks in added.items():
+            new = [c for c in chunks if self._chunk_key(c) not in seen]
+            seen.update(self._chunk_key(c) for c in new)
+            if new:
+                # 💡 setdefault: a re-planned search worded like a first-round one joins that topic
+                merged.setdefault(topic, []).extend(new)
+        return merged
 
     def _enrich_citations_with_urls(self, citations: List[Citation]) -> List[Citation]:
         for citation in citations:
@@ -403,20 +420,28 @@ class AgenticRAGEngine:
                         self.retriever.execute_task(task, scope)
 
                 # Re-synthesize — use same path as first attempt based on query type
+                # ⚠️ The new passages are added to the first round's, not swapped in, so a rewrite asked to fill a
+                # gap keeps what the first draft was built on. Reranking old and new together would not do: the
+                # reranker scores against the question, not the gap, so the first round's passages would win again.
+                # The writer also gets the feedback and its draft; before, only the search planner saw the feedback
                 if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-                    chunks_by_topic = self._collect_multi_topic_chunks(improved_plan)
+                    chunks_by_topic = self._merge_topics(
+                        chunks_by_topic, self._collect_multi_topic_chunks(improved_plan)
+                    )
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
-                        processed_query, analysis, chunks_by_topic
+                        processed_query, analysis, chunks_by_topic, feedback=guidance, draft=answer
                     )
                 else:
-                    all_chunks = self._collect_all_chunks(improved_plan)
+                    all_chunks = self._merge_chunks(all_chunks, self._collect_all_chunks(improved_plan))
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize(
-                        processed_query, analysis, improved_plan, all_chunks
+                        processed_query, analysis, improved_plan, all_chunks, feedback=guidance, draft=answer
                     )
 
                 # Update confidence with critique score
                 confidence = (confidence + critique.confidence_score) / 2
-                plan = improved_plan
+                # The recorded plan lists every search the answer drew on; a failed replan returns the plan unchanged
+                if improved_plan is not plan:
+                    plan = replace(improved_plan, sub_tasks=plan.sub_tasks + improved_plan.sub_tasks)
 
         # ========== Step 6b: Citation Check ==========
         # After any retry, so the final answer is the one checked

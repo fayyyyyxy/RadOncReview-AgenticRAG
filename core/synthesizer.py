@@ -8,7 +8,7 @@ from .models import (
     SelfCritiqueResult, QueryAnalysis
 )
 from .llm_client import BaseLLMClient
-from .citation_check import cited
+from .citation_check import GROUP, cited, split_references
 from .query_analyzer import as_bool
 from config import AgentConfig, Config
 
@@ -83,14 +83,38 @@ Guidelines for your responses:
         """Extract citation numbers used in the answer, including [4, 5] and [1-3]."""
         return list(cited(answer))
 
+    def _revision_request(self, feedback: Optional[str], draft: Optional[str]) -> str:
+        """What a rewrite after self-critique is asked to change; empty for a first draft, whose prompt stays as it was."""
+        if not feedback:
+            return ""
+        # ⚠️ The draft's citations were never checked (the citation check removes most of them) and their numbers
+        # belonged to the earlier passage list, so they are dropped and the rewrite cites the passages anew
+        body, _ = split_references(draft or "")
+        body = GROUP.sub("", body).strip()
+        # ⚠️ Feedback such as "add OAR constraints" invites invented numbers, so a gap the passages cannot fill is
+        # named instead
+        return f"""
+A reviewer read an earlier draft of this answer and asked for changes.
+Reviewer feedback: {feedback}
+
+Earlier draft, without its citations:
+{body}
+
+Write a new answer that keeps what the earlier draft got right and addresses the feedback, citing only the passages
+above by their numbers. If the feedback asks for something the passages do not contain, say that it is missing
+instead of supplying it.
+"""
+
     def synthesize(
         self,
         query: str,
         analysis: QueryAnalysis,
         plan: TaskPlan,
-        all_chunks: List[Dict]
+        all_chunks: List[Dict],
+        feedback: Optional[str] = None,
+        draft: Optional[str] = None
     ) -> tuple[str, List[Citation], float, List[Dict]]:
-        """Synthesize an answer from retrieved chunks."""
+        """Synthesize an answer from retrieved chunks; feedback and draft are given on a rewrite after self-critique."""
 
         if not all_chunks:
             return (
@@ -103,6 +127,7 @@ Guidelines for your responses:
 
         # Format context and prepare citations
         context, all_citations, passages = self._format_context(all_chunks)
+        revision = self._revision_request(feedback, draft)
 
         # Build synthesis prompt
         synthesis_prompt = f"""Based on the following retrieved information, answer the clinical question.
@@ -124,7 +149,7 @@ Instructions:
 5. Only include general background information if the specific question is fully addressed first
 6. If key information is missing from the sources, state what's missing
 7. Highlight any important safety considerations
-
+{revision}
 Answer:"""
 
         # Generate response
@@ -148,9 +173,11 @@ Answer:"""
         self,
         query: str,
         analysis: QueryAnalysis,
-        chunks_by_topic: Dict[str, List[Dict]]
+        chunks_by_topic: Dict[str, List[Dict]],
+        feedback: Optional[str] = None,
+        draft: Optional[str] = None
     ) -> tuple[str, List[Citation], float, List[Dict]]:
-        """Synthesize an answer from multiple retrieval results."""
+        """Synthesize an answer from multiple retrieval results; feedback and draft as in synthesize."""
 
         # Format context for each topic
         context_parts = []
@@ -171,6 +198,7 @@ Answer:"""
             all_passages.extend({**p, "topic": topic} for p in topic_passages)
 
         full_context = "\n\n".join(context_parts)
+        revision = self._revision_request(feedback, draft)
 
         synthesis_prompt = f"""
         Answer the following clinical question using the grouped information below.
@@ -189,7 +217,7 @@ Answer:"""
         6. Preserve distinctions between subtopics when relevant
         7. Highlight key differences or relationships if the question involves comparison
         8. Note any guideline recommendations or safety considerations
-
+{revision}
         Answer:
         """
 
