@@ -20,11 +20,12 @@ REPO = ROOT.parent
 sys.path.insert(0, str(REPO))
 
 from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, read_records, validate_records
+from config import LLMConfig
 from core.case_labels import SETTING_GROUPS, CaseLabels
 
-# Model for every engine LLM call in evaluation runs. Llama 3 70B's 8k context overflowed on
-# long evidence; the web app keeps config.py's default until a site is declared GO.
-WRITER_MODEL = "meta.llama3-1-70b-instruct-v1:0"
+# Model for every engine LLM call: the web app's, so a run measures what the app runs.
+# ⚠️ Read from config.py rather than written out again; two copies drifted apart before (Llama 3 vs 3.1)
+WRITER_MODEL = LLMConfig.model_id
 
 
 def make_query(record):

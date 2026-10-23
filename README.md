@@ -193,12 +193,12 @@ Clinical trial papers (700+, including DOCX and scanned PDF) are separately uplo
 | Step | Component | Model / Config | Description |
 |------|-----------|----------------|-------------|
 | 1 | Input Guardrails | — | PHI detection, input length validation |
-| 2 | Query Analyzer | `meta.llama3-70b-instruct-v1:0` | Intent classification, disease category, treatment modality extraction |
-| 3 | Task Planner | `meta.llama3-70b-instruct-v1:0` | Query decomposition, retrieval strategy selection |
+| 2 | Query Analyzer | `us.meta.llama3-3-70b-instruct-v1:0` | Intent classification, disease category, treatment modality extraction |
+| 3 | Task Planner | `us.meta.llama3-3-70b-instruct-v1:0` | Query decomposition, retrieval strategy selection |
 | 4 | Retriever | FAISS + DynamoDB + Bedrock KB |  FAISS: dense search; KB: hybrid search. top-6 FAISS & top-10 KB per topic| 
 | 5 | Reranker | `BAAI/bge-reranker-base` (cross-encoder) | Rerank to top-5 (simple) or top-3 per topic (complex/comparison) |
-| 6 | Synthesizer | `meta.llama3-70b-instruct-v1:0` | Response generation with inline citations |
-| 7 | Self-Critique | `meta.llama3-70b-instruct-v1:0` | Evaluates completeness, accuracy, safety — retries if needed |
+| 6 | Synthesizer | `us.meta.llama3-3-70b-instruct-v1:0` | Response generation with inline citations |
+| 7 | Self-Critique | `us.meta.llama3-3-70b-instruct-v1:0` | Evaluates completeness, accuracy, safety — retries if needed |
 | 8 | Output Guardrails | — | Safety verification, disclaimer injection |
 | 9 | LLM Judge v3 (`evaluation/llm_judge_v3.py`) | `us.amazon.nova-pro-v1:0` | **Online** evaluation after each response: retrieval adequacy, abstention, faithfulness, correctness, answer quality — composite score shown in chat |
 

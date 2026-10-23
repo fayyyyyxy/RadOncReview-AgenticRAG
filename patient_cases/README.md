@@ -104,8 +104,8 @@ The separate LLM judge is off by default; self-critique remains enabled as
 configured by the existing engine. Add --judge only if its extra model calls
 and calibration requirements are intended. Temperature is set to zero; this
 does not guarantee identical model responses on repeated runs. Every engine LLM
-call uses Llama 3.1 70B (128k context) by default for evaluation runs; pass
---model to choose another. The web app keeps the config.py default.
+call uses the web app's model from config.py (Llama 3.3 70B) by default; pass
+--model to choose another.
 
 Each run has its own ignored folder, outputs/<name>_answers/ when --name is
 given (for example --name site-filter), otherwise outputs/baseline_<timestamp>_<id>/, with

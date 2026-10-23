@@ -40,8 +40,9 @@ class AWSConfig:
 @dataclass
 class LLMConfig:
     """LLM configuration for AWS Bedrock."""
-    model_id: str = "meta.llama3-70b-instruct-v1:0"
-    max_tokens: int = 2048  # Llama 3 max_gen_len
+    # Llama 3.3 70B through the US cross-region inference profile; baseline runs use it too (patient_cases/run_baseline.py)
+    model_id: str = "us.meta.llama3-3-70b-instruct-v1:0"
+    max_tokens: int = 2048  # Llama max_gen_len
     temperature: float = 0.1  # Low temperature for factual responses
     top_p: float = 0.9
 
