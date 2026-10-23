@@ -111,12 +111,15 @@ knowledge to decide whether a trial or constraint exists.
 "unsupported_claims" instead.
 - Citations Verifiable = Y only if every [n] in the answer points to a passage above and that \
 passage supports the sentence the [n] is attached to. List every [n] that fails.
+- Copy each item in "fabricated" and "unsupported_claims" from the AI answer word for word: the \
+sentence, or the part of one, that states it, exactly as written, including any [n]. Do not reword, \
+shorten the middle or join separate pieces.
 
 Write the reason first, then the value. Reply with this JSON object and nothing else:
 {
-  "hallucination": {"reason": "<1-2 sentences>", "fabricated": ["<quote from the answer>"], "value": "<Y or N>"},
+  "hallucination": {"reason": "<1-2 sentences>", "fabricated": ["<text copied word for word from the answer>"], "value": "<Y or N>"},
   "citations_verifiable": {"reason": "<1-2 sentences>", "failing_citations": [<n>], "value": "<Y or N>"},
-  "unsupported_claims": ["<plausible claim from the answer that is not in the passages>"]
+  "unsupported_claims": ["<text copied word for word from the answer whose claim is not in the passages>"]
 }""")
 
 
