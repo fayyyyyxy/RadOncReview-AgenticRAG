@@ -143,9 +143,12 @@ written into the answer text instead lowered judged completeness and guideline
 adherence. An answer left with no citations is still judged, with Citations
 Verifiable set to N; skipping it would leave the least-grounded answers out of
 the scores.
-Brackets such as [4, 5] are checked one number at a time and rewritten as
-[4] [5]. An unparseable reply is retried once with the error; if it fails
-again, the answer is left unchanged and the error is recorded.
+Brackets such as [4, 5] or [4], [5] are checked one number at a time; the
+kept ones are rewritten as [4] [5], and a removed one takes the comma or "and"
+before it along. A reference list after a "References:" line is not checked:
+an entry stays while the answer still cites its number. An unparseable reply
+is retried once with the error; if it fails again, the answer is left
+unchanged and the error is recorded.
 
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
