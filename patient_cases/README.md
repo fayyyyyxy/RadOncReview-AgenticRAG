@@ -129,16 +129,18 @@ development subset. Locked-test evaluation is outside this runner's scope.
 ### Citation check
 
 ```bash
-python patient_cases/run_baseline.py --execute --citation-check
+python patient_cases/run_baseline.py --execute --no-citation-check
 ```
 
---citation-check adds a step after the answer is written (core/citation_check.py;
-off by default, so the web app is unchanged). One more LLM call per answer asks,
-for each sentence and each passage it cites, whether the passage states what
-the sentence says, numbers included. A rejected citation is removed and the
-sentence stays; sentences that lost a citation are listed in the response
-metadata (citation_check) for an interface to mark. A note written into the
-answer text instead lowered judged completeness and guideline adherence.
+After the answer is written, a citation check (core/citation_check.py) runs in
+the web app and in baseline runs; --no-citation-check skips it, as runs made
+before it did. One more LLM call per answer asks, for each sentence and each
+passage it cites, whether the passage states what the sentence says, numbers
+included. A rejected citation is removed and the sentence stays; sentences that
+lost a citation are listed in the response metadata (citation_check), and the
+web page underlines them and lists them under an "unsourced" badge. A note
+written into the answer text instead lowered judged completeness and guideline
+adherence.
 Brackets such as [4, 5] are checked one number at a time and rewritten as
 [4] [5]. An unparseable reply is retried once with the error; if it fails
 again, the answer is left unchanged and the error is recorded.

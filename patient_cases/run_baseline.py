@@ -121,7 +121,7 @@ def main(argv=None):
     parser.add_argument("--name", help="Readable run name such as site-filter; answers go to outputs/<name>_answers.")
     parser.add_argument("--site-filter", action="store_true", help="Limit evidence to each case's disease site.")
     parser.add_argument("--no-trial-papers", action="store_true", help="Search review notes only, not the trial-paper Knowledge Base.")
-    parser.add_argument("--citation-check", action="store_true", help="Check each citation against its passage after writing.")
+    parser.add_argument("--no-citation-check", action="store_true", help="Skip the citation check, as runs made before it did.")
     args = parser.parse_args(argv)
     try:
         if args.name is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", args.name):
@@ -139,7 +139,7 @@ def main(argv=None):
         if not args.execute:
             print(json.dumps({
                 "mode": "dry_run", "aws_calls": 0, "model": args.model, "site_filter": args.site_filter,
-                "trial_papers": not args.no_trial_papers, "citation_check": args.citation_check,
+                "trial_papers": not args.no_trial_papers, "citation_check": not args.no_citation_check,
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
                 "selected": [{"case_id": r["case_id"], "query_characters": len(make_query(r))} for r in selected],
@@ -155,7 +155,7 @@ def main(argv=None):
         # ⚠️ One shared client serves the analyzer, planner, writer and self-critique, so all of them switch
         config.llm.model_id = args.model
         config.features.site_filter = args.site_filter
-        config.features.citation_check = args.citation_check
+        config.features.citation_check = not args.no_citation_check
         # The planner still makes a trial-paper task per topic; with the Knowledge Base off it returns nothing
         config.aws.knowledge_base_enabled = not args.no_trial_papers
         # Log all settings, including the opt-in judge difference from the web app.

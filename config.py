@@ -106,9 +106,9 @@ class GuardrailConfig:
 
 @dataclass
 class FeatureConfig:
-    """Switches for evaluated changes; all off by default, so the web app keeps today's behaviour."""
+    """Switches for evaluated changes; each stays off until its evaluation supports turning it on in the web app."""
     site_filter: bool = False  # limit evidence to the user-selected disease site (core/site_routing.py)
-    citation_check: bool = False  # check each citation against its passage after writing (core/citation_check.py)
+    citation_check: bool = True  # check each citation against its passage after writing (core/citation_check.py)
 
 
 @dataclass
