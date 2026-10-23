@@ -2,13 +2,13 @@
 Response Synthesizer: Generates answers from retrieved chunks with citations.
 """
 from typing import List, Dict, Optional
-import re
 
 from .models import (
     RetrievedChunk, Citation, AgentResponse, TaskPlan,
     SelfCritiqueResult, QueryAnalysis
 )
 from .llm_client import BaseLLMClient
+from .citation_check import cited
 from config import AgentConfig, Config
 
 
@@ -79,10 +79,8 @@ Guidelines for your responses:
         return context, citations, passages
 
     def _extract_citations_used(self, answer: str) -> List[int]:
-        """Extract citation numbers used in the answer."""
-        pattern = r'\[(\d+)\]'
-        matches = re.findall(pattern, answer)
-        return list(set(int(m) for m in matches))
+        """Extract citation numbers used in the answer, including [4, 5] and [1-3]."""
+        return list(cited(answer))
 
     def synthesize(
         self,

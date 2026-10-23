@@ -153,8 +153,19 @@ def check_context(response):
     return problems
 
 
+# [3], [4, 5] and [1-3]: the writer does not always use separate brackets
+CITATION = re.compile(r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]")
+
+
 def markers(answer):
-    return sorted({int(m) for m in re.findall(r"\[(\d+)\]", answer)})
+    """Every cited passage number; a range such as [1-3] cites each number in it."""
+    # ⚠️ Not shared with core/citation_check.py, so the judge cannot inherit a parsing bug from what it scores
+    found = set()
+    for group in CITATION.findall(answer):
+        for part in group.split(","):
+            ends = [int(n) for n in re.findall(r"\d+", part)]
+            found.update(range(ends[0], ends[-1] + 1) if len(ends) == 2 and ends[0] < ends[1] else ends)
+    return sorted(found)
 
 
 def load_cases(run, workbook):
