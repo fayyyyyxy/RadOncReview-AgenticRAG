@@ -114,6 +114,8 @@ details.card[open] > summary { margin-bottom: 8px; }
 .secondary { color: var(--text-secondary); }
 .legend { margin: 2px 0 10px; }
 mark.claim { background: var(--claim-wash); color: inherit; border-radius: 3px; padding: 0 1px; cursor: pointer; }
+.claim-approx { text-decoration: underline dashed var(--status-serious); text-decoration-thickness: 1.5px;
+                text-underline-offset: 3px; cursor: pointer; }
 .claim-tag { font-size: 10px; color: var(--text-secondary); margin-left: 1px; }
 .cite { color: var(--accent); cursor: pointer; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .cite.fail::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 2px; border-radius: 50%;
@@ -257,6 +259,64 @@ function judgeFindings(c) {
   return { failing, claims };
 }
 
+// Curly quotes and dashes become plain ones, one character for one, so offsets still line up with the text
+const plainChars = (s) => s.replace(/[‘’ʼ]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-');
+const STOP = new Set(('the and for with that this are was were from can may should which its into not but has have '
+                      + 'been also than such these those their there').split(' '));
+// Share of a paraphrased claim's words that a sentence must contain to be marked as its approximate place,
+// and how far it must lead the next best sentence. Near ties, where the claim's words recur across sentences,
+// caused most wrong marks: on verbatim claims made vague at random, the lead rule cut them from 4.2% to 0.4%
+// of placed claims, while a higher share alone did not (0.8 gave 5.0%)
+const APPROX_MIN = 0.6;
+const APPROX_LEAD = 0.2;
+
+function contentWords(s) {
+  const found = plainChars(s.toLowerCase()).replace(/\[[\d,\s-]+\]/g, ' ').match(/[a-z0-9][a-z0-9.'-]*/g) || [];
+  return new Set(found.map((w) => w.replace(/[.'-]+$/, '')).filter((w) => w.length > 2 && !STOP.has(w)));
+}
+
+// Sentence spans without list markers or surrounding spaces; a decimal point ("2.5 Gy") never ends one
+function sentenceSpans(text) {
+  const spans = [];
+  let start = 0, m;
+  const endRe = /[.!?](?=\s|$)|\n/g;
+  while ((m = endRe.exec(text))) { spans.push([start, endRe.lastIndex]); start = endRe.lastIndex; }
+  if (start < text.length) spans.push([start, text.length]);
+  return spans.map(([s, e]) => {
+    const seg = text.slice(s, e);
+    const lead = seg.match(/^\s*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)?/)[0].length;
+    return [s + lead, e - (seg.length - seg.trimEnd().length)];
+  }).filter(([s, e]) => e > s);
+}
+
+// The judge often rewords an unsupported claim, so it cannot be found verbatim: mark the sentence that
+// shares most of its words, as an approximate place. Sentences holding several claims get one range.
+function approximateRanges(text, findings) {
+  const spans = sentenceSpans(text);
+  const bySpan = new Map();
+  findings.claims.forEach((cl, ci) => {
+    if (cl.match) return;
+    const words = contentWords(cl.text);
+    if (words.size < 3) return;
+    const ranked = spans.map(([s, e]) => {
+      const sentence = contentWords(text.slice(s, e));
+      let shared = 0;
+      words.forEach((w) => { if (sentence.has(w)) shared++; });
+      return { span: [s, e], shared, share: shared / words.size };
+    }).sort((a, b) => b.share - a.share);
+    const [first, next] = ranked;
+    // A tie gives a lead of 0, so it is never marked
+    if (!first || first.shared < 3 || first.share < APPROX_MIN
+        || first.share - (next ? next.share : 0) < APPROX_LEAD) return;
+    const best = first.span;
+    const key = best.join('-');
+    if (!bySpan.has(key)) bySpan.set(key, [best[0], best[1], []]);
+    bySpan.get(key)[2].push(ci);
+    cl.match = 'approx';
+  });
+  return [...bySpan.values()];
+}
+
 // Strip **bold** markers, then split the clean text at every bold / claim / citation boundary
 // so each segment can be wrapped independently even when the ranges overlap.
 function renderAnswer(container, raw, findings) {
@@ -272,15 +332,20 @@ function renderAnswer(container, raw, findings) {
   }
   text += raw.slice(last);
 
-  const lower = text.toLowerCase();
+  // ⚠️ Both sides go through plainChars: "Dupuytren’s" in an answer must match "Dupuytren's" in the judge's quote
+  const lower = plainChars(text.toLowerCase());
   const claimRanges = [];
   findings.claims.forEach((cl, ci) => {
-    const q = cl.text.toLowerCase();
+    // The answer's ** markers were removed above, so a quote copied with them must lose them too
+    const q = plainChars(cl.text.replace(/\*\*/g, '').toLowerCase());
+    // ⚠️ An empty quote would match at every position and never advance the loop
+    if (!q.trim()) return;
     for (let i = lower.indexOf(q); i !== -1; i = lower.indexOf(q, i + q.length)) {
       claimRanges.push([i, i + q.length, ci]);
-      cl.found = true;
+      cl.match = 'exact';
     }
   });
+  const approxRanges = approximateRanges(text, findings);
 
   const citeRanges = [];
   const cited = new Set();
@@ -292,7 +357,7 @@ function renderAnswer(container, raw, findings) {
   }
 
   const cuts = new Set([0, text.length]);
-  [bold, claimRanges, citeRanges].forEach((rs) => rs.forEach((r) => { cuts.add(r[0]); cuts.add(r[1]); }));
+  [bold, claimRanges, approxRanges, citeRanges].forEach((rs) => rs.forEach((r) => { cuts.add(r[0]); cuts.add(r[1]); }));
   const pts = [...cuts].sort((a, b) => a - b);
   const cover = (rs, a) => rs.find((r) => r[0] <= a && a < r[1]);
   const anchored = new Set();
@@ -308,7 +373,8 @@ function renderAnswer(container, raw, findings) {
         s.classList.add('fail');
         s.title = 'Judge: citation does not support this statement';
       }
-      s.addEventListener('click', () => reveal($('passage-' + ids[0])));
+      // stopPropagation: a citation sits inside claim marks, which have their own click target
+      s.addEventListener('click', (e) => { e.stopPropagation(); reveal($('passage-' + ids[0])); });
       node = s;
     }
     if (cover(bold, a)) { const s = el('strong'); s.appendChild(node); node = s; }
@@ -317,13 +383,35 @@ function renderAnswer(container, raw, findings) {
       const mk = el('mark', 'claim');
       mk.appendChild(node);
       mk.title = 'Unsupported claim ' + (cl[2] + 1) + ' (judge)';
-      mk.addEventListener('click', () => reveal($('claimref-' + cl[2])));
-      if (!anchored.has(cl[2])) { mk.id = 'claim-' + cl[2]; anchored.add(cl[2]); }
+      mk.addEventListener('click', (e) => { e.stopPropagation(); reveal($('claimref-' + cl[2])); });
+      if (!anchored.has(cl[2])) { mk.id = 'claim-' + cl[2]; anchored.add(cl[2]); findings.claims[cl[2]].anchor = mk.id; }
       node = mk;
+    }
+    const ap = cover(approxRanges, a);
+    if (ap) {
+      const sp = el('span', 'claim-approx');
+      sp.appendChild(node);
+      sp.title = 'Approximate place of unsupported claim ' + ap[2].map((i) => i + 1).join(', ')
+        + ' (the judge reworded it)';
+      sp.addEventListener('click', () => reveal($('claimref-' + ap[2][0])));
+      // One id per range, on its first segment; every claim in the range jumps there
+      if (!anchored.has('approx-' + ap[0])) {
+        sp.id = 'claim-approx-' + ap[0];
+        anchored.add('approx-' + ap[0]);
+        ap[2].forEach((i) => { findings.claims[i].anchor = sp.id; });
+      }
+      node = sp;
     }
     container.appendChild(node);
     if (cl && b === cl[1]) container.appendChild(el('sup', 'claim-tag', cl[2] + 1));
+    if (ap && b === ap[1]) container.appendChild(el('sup', 'claim-tag', '≈' + ap[2].map((i) => i + 1).join(',')));
   }
+  // A claim lying inside another claim's mark gets no mark of its own; it jumps to the mark that holds it
+  claimRanges.forEach(([s, , ci]) => {
+    if (findings.claims[ci].anchor) return;
+    const host = claimRanges.find((r) => r[0] <= s && s < r[1] && findings.claims[r[2]].anchor);
+    if (host) findings.claims[ci].anchor = findings.claims[host[2]].anchor;
+  });
   return cited;
 }
 
@@ -340,6 +428,8 @@ function renderResult(c, findings) {
   const legend = el('div', 'legend small muted');
   legend.appendChild(el('mark', 'claim', 'highlight'));
   legend.appendChild(document.createTextNode(' unsupported claim (judge) · '));
+  legend.appendChild(el('span', 'claim-approx', 'dashed'));
+  legend.appendChild(document.createTextNode(' its approximate place when the judge reworded it · '));
   legend.appendChild(el('span', 'cite fail', '[n]'));
   legend.appendChild(document.createTextNode(' citation the judge could not verify · click either to jump'));
   a.appendChild(legend);
@@ -478,11 +568,12 @@ function renderScore(c, findings) {
     const li = el('li');
     li.id = 'claimref-' + ci;
     li.appendChild(el('div', null, '“' + cl.text + '”'));
-    li.appendChild(el('div', 'small muted',
-      'run ' + cl.runs.join(', ') + (cl.found ? ' · click to find in answer' : ' · not found verbatim in answer')));
-    if (cl.found) {
+    const where = !cl.anchor ? ' · not found in answer'
+      : cl.match === 'approx' ? ' · approximate place (the judge reworded it) · click to find' : ' · click to find in answer';
+    li.appendChild(el('div', 'small muted', 'run ' + cl.runs.join(', ') + where));
+    if (cl.anchor) {
       li.classList.add('linked');
-      li.addEventListener('click', () => reveal($('claim-' + ci)));
+      li.addEventListener('click', () => reveal($(cl.anchor)));
     }
     ol.appendChild(li);
   });
