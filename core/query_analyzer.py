@@ -10,6 +10,15 @@ from .llm_client import BaseLLMClient
 from config import AgentConfig, Config
 
 
+def as_bool(value, default: bool = False) -> bool:
+    """A yes/no field from an LLM's JSON reply; text such as "true" or "false" counts, anything else is the default."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    # ⚠️ bool("false") is True in Python, so a quoted false must be read, not tested for truth
+    return {"true": True, "yes": True, "false": False, "no": False}.get(text, default)
+
+
 class QueryAnalyzer:
     """Analyzes and classifies radiation oncology queries."""
 
@@ -263,7 +272,7 @@ Extract the following information in JSON format:
                     treatment_modality=result.get("treatment_modality"),
                     key_entities=result.get("key_entities", []),
                     temporal_context=result.get("temporal_context"),
-                    is_complex=result.get("is_complex", False),
+                    is_complex=as_bool(result.get("is_complex")),
                     confidence=0.9,  # LLM analysis has higher confidence
                     needs_trial_evidence=self._detect_trial_evidence_need(query)
                 )
