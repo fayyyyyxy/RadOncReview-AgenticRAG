@@ -426,7 +426,10 @@ class AgenticRAGEngine:
         citation_check = None
         if self.config.features.citation_check:
             self._log_reasoning("CHECK", "Checking each citation against its passage")
+            answer_before = answer
             answer, citation_check = self.citation_checker.check(answer, context_passages)
+            # 💡 Kept so that a change to the check can be replayed on the same answer instead of a new run
+            citation_check["answer_before"] = answer_before
             # Only citations still in the answer stay in the source list
             remaining = cited(answer)
             citations = [c for c in citations if c.citation_id in remaining]

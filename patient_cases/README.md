@@ -149,6 +149,8 @@ before it along. A reference list after a "References:" line is not checked:
 an entry stays while the answer still cites its number. An unparseable reply
 is retried once with the error; if it fails again, the answer is left
 unchanged and the error is recorded.
+The answer as written is kept in the report (answer_before), so a change to
+the check can be replayed on the same text instead of a new run.
 
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
