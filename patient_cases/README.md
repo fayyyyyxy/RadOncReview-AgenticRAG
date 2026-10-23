@@ -140,7 +140,9 @@ included. A rejected citation is removed and the sentence stays; sentences that
 lost a citation are listed in the response metadata (citation_check), and the
 web page underlines them and lists them under an "unsourced" badge. A note
 written into the answer text instead lowered judged completeness and guideline
-adherence.
+adherence. An answer left with no citations is still judged, with Citations
+Verifiable set to N; skipping it would leave the least-grounded answers out of
+the scores.
 Brackets such as [4, 5] are checked one number at a time and rewritten as
 [4] [5]. An unparseable reply is retried once with the error; if it fails
 again, the answer is left unchanged and the error is recorded.

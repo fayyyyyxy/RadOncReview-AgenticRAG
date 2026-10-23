@@ -171,6 +171,11 @@ def markers(answer):
     return sorted(found)
 
 
+# An answer whose citations were all removed is still judged: skipping it would drop the
+# least-grounded answers from every average.
+SCORABLE = {"response_generated", "response_without_citations"}
+
+
 def load_cases(run, workbook):
     """Join saved answers with workbook plans; refuse anything that is not a development case."""
     records = read_records(workbook)
@@ -187,7 +192,7 @@ def load_cases(run, workbook):
             raise ValueError(f"{case_id} is not a development case; locked-test judging waits for step 9.")
         if result["query"] != make_query({"vignette": source[VIGNETTE], "clinical_question": source[QUESTION]}):
             raise ValueError(f"{case_id}: the saved query no longer matches the workbook.")
-        if result["status"] != "response_generated":
+        if result["status"] not in SCORABLE:
             skipped[case_id] = result["status"]
             continue
         response = result["response"]
@@ -293,8 +298,15 @@ def judge_run(call_model, case, rubric):
     if errors:
         return {"error": errors}
     scores = {**clinical["scores"], **grounding["scores"]}
-    missing = sorted(set(markers(case["answer"])) - {p["citation_id"] for p in case["passages"]})
-    if missing:
+    cited = markers(case["answer"])
+    missing = sorted(set(cited) - {p["citation_id"] for p in case["passages"]})
+    if not cited:
+        # ⚠️ "Every [n] supports its sentence" is trivially true with no [n]; citing nothing must not pass.
+        scores["citations_verifiable"] = {
+            "value": "N", "reason": "Code check: the answer has no citations to verify.",
+            "failing_citations": [], "model_value": scores["citations_verifiable"]["value"],
+        }
+    elif missing:
         # 💡 Exact checks run in code; the model is asked only for judgement.
         scores["citations_verifiable"] = {
             "value": "N", "reason": f"Code check: the answer cites {missing} with no matching passage.",
