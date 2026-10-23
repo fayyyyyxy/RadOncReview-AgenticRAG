@@ -198,7 +198,7 @@ Clinical trial papers (700+, including DOCX and scanned PDF) are separately uplo
 | 4 | Retriever | FAISS + DynamoDB + Bedrock KB |  FAISS: dense search; KB: hybrid search. top-6 FAISS & top-10 KB per topic| 
 | 5 | Reranker | `BAAI/bge-reranker-base` (cross-encoder) | Rerank to top-5 (simple) or top-3 per topic (complex/comparison) |
 | 6 | Synthesizer | `us.meta.llama3-3-70b-instruct-v1:0` | Response generation with inline citations |
-| 7 | Self-Critique | `us.meta.llama3-3-70b-instruct-v1:0` | Evaluates completeness, accuracy, safety — retries if needed |
+| 7 | Self-Critique | `us.meta.llama3-3-70b-instruct-v1:0` | Evaluates completeness and safety — retries if needed; citation support is left to step 8 |
 | 8 | Citation Check (`core/citation_check.py`) | `us.meta.llama3-3-70b-instruct-v1:0` | Checks each citation against its passage; removes unsupported ones and lists those sentences for the page to mark |
 | 9 | Output Guardrails | — | Safety verification, disclaimer injection |
 | 10 | LLM Judge v3 (`evaluation/llm_judge_v3.py`) | `us.amazon.nova-pro-v1:0` | **Online** evaluation after each response: retrieval adequacy, abstention, faithfulness, correctness, answer quality — composite score shown in chat |

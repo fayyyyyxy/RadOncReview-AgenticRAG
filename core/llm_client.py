@@ -212,13 +212,11 @@ class MockLLMClient(BaseLLMClient):
         self.call_count += 1
 
         # Return mock data based on what the schema expects
-        if "is_complete" in str(output_schema):
+        if "checklist" in str(output_schema):
             # Self-critique response
             return {
-                "is_complete": True,
-                "is_accurate": True,
+                "checklist": [{"item": "dose and fractionation", "addressed": True, "gap": ""}],
                 "is_safe": True,
-                "missing_aspects": [],
                 "concerns": [],
                 "confidence_score": 0.85,
                 "suggestions": []

@@ -108,14 +108,15 @@ class Citation:
 
 @dataclass
 class SelfCritiqueResult:
-    """Result of self-critique evaluation."""
+    """Result of self-critique evaluation; citation support is checked separately (core/citation_check.py)."""
     is_complete: bool
-    is_accurate: bool
     is_safe: bool
     missing_aspects: List[str] = field(default_factory=list)
     concerns: List[str] = field(default_factory=list)
     confidence_score: float = 0.0
     suggestions: List[str] = field(default_factory=list)
+    # What the question asks for, each with addressed and gap; is_complete and missing_aspects are derived from it
+    checklist: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

@@ -378,13 +378,10 @@ class AgenticRAGEngine:
         critique = None
         if self.config.agent.enable_self_critique:
             self._log_reasoning("CRITIQUE", "Performing self-evaluation")
-            critique = self.self_critic.critique(
-                processed_query, answer, citations, analysis
-            )
+            critique = self.self_critic.critique(processed_query, answer, analysis)
 
             self._log_reasoning("CRITIQUE",
                 f"Complete: {critique.is_complete}, "
-                f"Accurate: {critique.is_accurate}, "
                 f"Safe: {critique.is_safe}, "
                 f"Confidence: {critique.confidence_score:.2f}"
             )

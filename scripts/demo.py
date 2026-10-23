@@ -41,7 +41,6 @@ def format_response(response) -> str:
         critique = response.self_critique
         output.append(f"\n Self-Critique:")
         output.append(f"  Complete: {'✓' if critique.is_complete else '✗'}")
-        output.append(f"  Accurate: {'✓' if critique.is_accurate else '✗'}")
         output.append(f"  Safe: {'✓' if critique.is_safe else '✗'}")
         if critique.missing_aspects:
             output.append(f"  Missing: {', '.join(critique.missing_aspects)}")

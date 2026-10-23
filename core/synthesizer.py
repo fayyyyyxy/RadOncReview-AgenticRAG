@@ -9,6 +9,7 @@ from .models import (
 )
 from .llm_client import BaseLLMClient
 from .citation_check import cited
+from .query_analyzer import as_bool
 from config import AgentConfig, Config
 
 
@@ -207,10 +208,16 @@ Answer:"""
 
 
 class SelfCritic:
-    """Evaluates generated answers for completeness, accuracy, and safety."""
+    """Evaluates generated answers for completeness and safety.
+
+    Whether citations support the answer is left to core/citation_check.py, which reads each cited passage in
+    full; this step used to judge it from the first 200 characters of each passage, about a fifth of one.
+    Completeness is a checklist of what the question asks for, each item judged on its own: asked only whether the
+    answer was complete, the model called 36 of 40 answers complete, 21 of which the judge scored 2 of 5 or lower.
+    """
 
     CRITIQUE_PROMPT = """You are a radiation oncology expert reviewer.
-Evaluate the following answer for completeness, accuracy, and safety."""
+Evaluate the following answer for completeness and safety."""
 
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
@@ -220,17 +227,14 @@ Evaluate the following answer for completeness, accuracy, and safety."""
         self,
         query: str,
         answer: str,
-        citations: List[Citation],
         analysis: QueryAnalysis
     ) -> SelfCritiqueResult:
         """Perform self-critique on the generated answer."""
 
-        # Format citations for review
-        citation_text = "\n".join([
-            f"[{c.citation_id}] {c.source_path}: {c.chunk_text[:200]}..."
-            for c in citations
-        ])
-
+        # ⚠️ "Cite the supporting evidence" stays off the checklist: a rewrite told to name trials would invent them,
+        # and naming a trial, study or year is where most judged hallucinations were.
+        # ⚠️ No example items either: given "for example ... follow-up", the model listed follow-up as missing in 23
+        # of 40 answers although no question asked for it
         critique_prompt = f"""Evaluate this radiation oncology answer:
 
 Question: {query}
@@ -239,16 +243,18 @@ Query Type: {analysis.intent.value}
 Answer:
 {answer}
 
-Sources used:
-{citation_text}
+1. List each thing the question explicitly asks for, in the question's own words. Do not add anything the question \
+does not ask about. Leave out requests to cite sources; citations are checked separately.
+2. Mark an item addressed only if the answer gives a specific recommendation for this patient. Saying that the \
+sources do not cover it, giving general background, or answering for another condition or setting does not count.
+3. Note any recommendation that could harm this patient if followed.
 
-Evaluate on these criteria and respond in JSON format:
+Respond in JSON format:
 {{
-    "is_complete": <true if answer fully addresses the question>,
-    "is_accurate": <true if claims are supported by citations>,
+    "checklist": [{{"item": "<what the question asks for>", "addressed": <true or false>, \
+"gap": "<what is missing, if not addressed>"}}],
     "is_safe": <true if no potentially harmful recommendations>,
-    "missing_aspects": ["<list of important aspects not addressed>"],
-    "concerns": ["<list of accuracy or safety concerns>"],
+    "concerns": ["<list of safety concerns>"],
     "confidence_score": <0.0-1.0 overall confidence>,
     "suggestions": ["<suggestions for improvement>"]
 }}"""
@@ -257,10 +263,8 @@ Evaluate on these criteria and respond in JSON format:
             result = self.llm.generate_structured(
                 critique_prompt,
                 output_schema={
-                    "is_complete": "boolean",
-                    "is_accurate": "boolean",
+                    "checklist": "array",
                     "is_safe": "boolean",
-                    "missing_aspects": "array",
                     "concerns": "array",
                     "confidence_score": "number",
                     "suggestions": "array"
@@ -268,15 +272,20 @@ Evaluate on these criteria and respond in JSON format:
                 system_prompt=self.CRITIQUE_PROMPT
             )
 
-            if "error" not in result:
+            checklist = [c for c in result.get("checklist") or [] if isinstance(c, dict) and str(c.get("item", "")).strip()]
+            # Without a usable checklist the critique failed, and the default below applies
+            if "error" not in result and checklist:
+                # ⚠️ as_bool, not bool(): "addressed": "false" is truthy text. An unreadable value counts as addressed
+                missing = [f"{c['item']}: {c.get('gap') or 'not addressed'}"
+                           for c in checklist if not as_bool(c.get("addressed"), default=True)]
                 return SelfCritiqueResult(
-                    is_complete=result.get("is_complete", True),
-                    is_accurate=result.get("is_accurate", True),
-                    is_safe=result.get("is_safe", True),
-                    missing_aspects=result.get("missing_aspects", []),
+                    is_complete=not missing,  # from the items, not the model's overall impression
+                    is_safe=as_bool(result.get("is_safe"), default=True),
+                    missing_aspects=missing,
                     concerns=result.get("concerns", []),
                     confidence_score=result.get("confidence_score", 0.5),
-                    suggestions=result.get("suggestions", [])
+                    suggestions=result.get("suggestions", []),
+                    checklist=checklist
                 )
         except Exception as e:
             print(f"Self-critique failed: {e}")
@@ -284,21 +293,19 @@ Evaluate on these criteria and respond in JSON format:
         # Default result if critique fails
         return SelfCritiqueResult(
             is_complete=True,
-            is_accurate=True,
             is_safe=True,
             confidence_score=0.5
         )
 
     def should_retry(self, critique: SelfCritiqueResult) -> bool:
         """Determine if the answer should be regenerated."""
-        # Retry if not safe or confidence is very low
+        # Retry if not safe, confidence is very low, or anything the question asks for is missing
         if not critique.is_safe:
             return True
         if critique.confidence_score < 0.4:
             return True
-        if not critique.is_complete and len(critique.missing_aspects) > 2:
-            return True
-        return False
+        # One missing item is enough: requiring more than two retried 3 of 40 answers
+        return not critique.is_complete
 
     def get_improvement_guidance(self, critique: SelfCritiqueResult) -> str:
         """Generate guidance for improving the answer."""
