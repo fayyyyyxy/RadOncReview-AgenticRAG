@@ -4,6 +4,7 @@ Handles all interactions with the language model.
 """
 import boto3
 import json
+import re
 from typing import List, Dict, Optional, Any
 from abc import ABC, abstractmethod
 
@@ -40,9 +41,15 @@ class BedrockLLMClient(BaseLLMClient):
             "bedrock-runtime",
             region_name=aws_config.region
         )
+        # Sent through Converse until a model rejects them
+        self._sampling = {"temperature": llm_config.temperature, "topP": llm_config.top_p}
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Generate a response using LLM on Bedrock."""
+        model_id = self.config.model_id
+        if not ("anthropic" in model_id or "titan" in model_id or "meta" in model_id or "llama" in model_id.lower()):
+            # ⚠️ invoke_model needs each vendor's own request format; Converse takes one format for every model
+            return self._converse(prompt, system_prompt)
 
         # Detect the model type and use the corresponding API format
         if "anthropic" in self.config.model_id:
@@ -94,15 +101,6 @@ class BedrockLLMClient(BaseLLMClient):
                 "temperature": self.config.temperature,
                 "top_p": self.config.top_p
             }
-        else:
-            # Default
-            request_body = {
-                "inputText": prompt,
-                "textGenerationConfig": {
-                    "maxTokenCount": self.config.max_tokens,
-                    "temperature": self.config.temperature
-                }
-            }
 
         response = self.client.invoke_model(
             modelId=self.config.model_id,
@@ -116,10 +114,32 @@ class BedrockLLMClient(BaseLLMClient):
             return response_body["content"][0]["text"]
         elif "titan" in self.config.model_id:
             return response_body["results"][0]["outputText"]
-        elif "meta" in self.config.model_id or "llama" in self.config.model_id.lower():
-            return response_body["generation"]
         else:
-            return response_body.get("results", [{}])[0].get("outputText", str(response_body))
+            return response_body["generation"]
+
+    def _converse(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """Any other Bedrock model (OpenAI, DeepSeek, Qwen, Mistral...) through Converse, which applies its chat format."""
+        request = {
+            "modelId": self.config.model_id,
+            "messages": [{"role": "user", "content": [{"text": prompt}]}],
+            "inferenceConfig": {"maxTokens": self.config.max_tokens, **self._sampling},
+        }
+        if system_prompt:
+            request["system"] = [{"text": system_prompt}]
+        try:
+            response = self.client.converse(**request)
+        except self.client.exceptions.ValidationException as exc:
+            # Some models reject temperature or top_p (the judge's Opus 5.5 does); drop both once and remember it
+            if not self._sampling or not re.search(r"temperature|top_?p", str(exc), re.IGNORECASE):
+                raise
+            self._sampling = {}
+            request["inferenceConfig"] = {"maxTokens": self.config.max_tokens}
+            response = self.client.converse(**request)
+        if response.get("stopReason") == "max_tokens":
+            # Reasoning models spend part of maxTokens before writing, so a cut-off reply is logged, not hidden
+            print(f"Converse reply cut off at maxTokens={self.config.max_tokens} ({self.config.model_id})")
+        # 💡 Reasoning blocks carry no "text" key, so only the written reply is joined
+        return "".join(block.get("text", "") for block in response["output"]["message"]["content"])
 
     def generate_with_tools(
         self,

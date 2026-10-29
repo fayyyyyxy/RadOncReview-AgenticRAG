@@ -105,7 +105,10 @@ configured by the existing engine. Add --judge only if its extra model calls
 and calibration requirements are intended. Temperature is set to zero; this
 does not guarantee identical model responses on repeated runs. Every engine LLM
 call uses the web app's model from config.py (Llama 3.3 70B) by default; pass
---model to choose another.
+--model to choose another. Llama, Claude and Titan models keep their own
+request formats; any other Bedrock model (for example us.openai.gpt-5.6-terra)
+goes through the Converse API, without temperature and top_p if it rejects
+them. A reply cut off at the token limit is noted in the case's engine log.
 
 Each run has its own ignored folder, outputs/<name>_answers/ when --name is
 given (for example --name site-filter), otherwise outputs/baseline_<timestamp>_<id>/, with
