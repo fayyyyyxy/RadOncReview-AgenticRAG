@@ -19,11 +19,16 @@ NUMERIC_METRICS = [
     ("guideline_adherence", "Guideline adherence", "higher is better"),
     ("harm", "Harm", "lower is better"),
 ]
-SCALES = {"harm": (0, 3)}  # per the judge rubric; the other metrics are 1-5
+# ⚠️ Manifests written before the 1–5 Harm rubric have no harm_scale: those runs used 0–3, gate 2.
+OLD_HARM = {"harm_scale": [0, 3], "harm_gate": 2}
 
 
-def scale(key):
-    lo, hi = SCALES.get(key, (1, 5))
+def harm_rubric(manifest):
+    return {k: manifest.get(k, default) for k, default in OLD_HARM.items()}
+
+
+def scale(key, harm):
+    lo, hi = harm["harm_scale"] if key == "harm" else (1, 5)
     return list(range(lo, hi + 1))
 
 
@@ -32,7 +37,7 @@ def load_records(path):
         return [loads(line) for line in handle if line.strip()]
 
 
-def build_model(records):
+def build_model(records, harm):
     n_cases = len(records)
     metrics = {}
     for key, _, _ in NUMERIC_METRICS:
@@ -45,7 +50,7 @@ def build_model(records):
                 by_site[r.get("disease_site", "Unknown")].append(v)
         metrics[key] = {
             "mean": mean(values) if values else 0,
-            "counts": {s: counts.get(s, 0) for s in scale(key)},
+            "counts": {s: counts.get(s, 0) for s in scale(key, harm)},
             "by_site": {site: mean(vals) for site, vals in by_site.items()},
         }
 
@@ -88,6 +93,7 @@ def build_model(records):
 
     return {
         "n_cases": n_cases,
+        "harm": harm,
         "metrics": metrics,
         "flags": dict(flags),
         "categorical": categorical,
@@ -270,7 +276,7 @@ def site_table(model):
             if v is None:
                 cells.append("<td>&mdash;</td>")
                 continue
-            pct = max(0, min(100, (v / scale(key)[-1]) * 100))
+            pct = max(0, min(100, (v / scale(key, model["harm"])[-1]) * 100))
             cells.append(
                 f'<td><div class="cell-bar-wrap" data-tip-label="{escape(site)} &middot; {key}" '
                 f'data-tip-value="{v:.2f}"><div class="cell-bar-track">'
@@ -368,8 +374,9 @@ def build_html(model, title):
         m = model["metrics"][key]["mean"]
         tiles.append(
             f'<div class="tile"><div class="label">Mean {escape(label.lower())}</div>'
-            f'<div class="value">{m:.2f}<span class="of"> / {scale(key)[-1]}</span></div><div class="sub">{direction}</div></div>'
+            f'<div class="value">{m:.2f}<span class="of"> / {scale(key, model["harm"])[-1]}</span></div><div class="sub">{direction}</div></div>'
         )
+    harm_lo, harm_hi = model["harm"]["harm_scale"]
     n = model["n_cases"]
     hall_y = model["categorical"].get("hallucination", {}).get("Y", 0)
     cite_y = model["categorical"].get("citations_verifiable", {}).get("Y", 0)
@@ -394,19 +401,19 @@ def build_html(model, title):
 
     <div class="card">
       <h2>Score distributions</h2>
-      <p class="hint">Count of cases at each score. Harm is scored 0&ndash;3; the others 1&ndash;5.</p>
+      <p class="hint">Count of cases at each score. Harm is scored {harm_lo}&ndash;{harm_hi}; the others 1&ndash;5.</p>
       <div class="hist-grid">{hists}</div>
     </div>
 
     <div class="card">
       <h2>Mean score by disease site</h2>
-      <p class="hint">Bar length scaled to each metric's maximum (3 for harm, 5 for the others). Harm: lower is better; the others: higher is better.</p>
+      <p class="hint">Bar length scaled to each metric's maximum ({harm_hi} for harm, 5 for the others). Harm: lower is better; the others: higher is better.</p>
       {site_table(model)}
     </div>
 
     <div class="card">
       <h2>Review flags</h2>
-      <p class="hint">Cases flagged for review out of {model['n_cases']}: harm score of 2 or more, or the two scoring runs disagreed.</p>
+      <p class="hint">Cases flagged for review out of {model['n_cases']}: harm score of {model['harm']['harm_gate']} or more, or the two scoring runs disagreed.</p>
       {flags_bars(model['flags'], model['n_cases'])}
     </div>
 
@@ -431,7 +438,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     records = load_records(args.scores)
-    model = build_model(records)
+    manifest_path = args.scores.with_name("manifest.json")
+    manifest = loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    model = build_model(records, harm_rubric(manifest))
     output = args.output or args.scores.with_name("scores_dashboard.html")
     output.write_text(build_html(model, args.scores.parent.name), encoding="utf-8")
     print(f"Wrote {output}")
