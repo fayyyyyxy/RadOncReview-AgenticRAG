@@ -123,7 +123,8 @@ configuration and input hashes; the live evidence index is not frozen.
 
 Queries exceeding the existing input limit are skipped, never truncated.
 Blocked responses, missing evidence/citations and incomplete retrieval are
-flagged. Inspect logs even when response generation succeeds: the existing
+flagged; an answer written after incomplete retrieval is still judged, as one
+left with no citations is. Inspect logs even when response generation succeeds: the existing
 engine may fall back after reranker or retrieval errors. A generated response
 is not a clinical accuracy assessment. No automatic retries or resume are
 provided; rerunning creates a new folder and can incur charges again.

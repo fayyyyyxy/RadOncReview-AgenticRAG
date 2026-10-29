@@ -173,9 +173,9 @@ def markers(answer):
     return sorted(found)
 
 
-# An answer whose citations were all removed is still judged: skipping it would drop the
-# least-grounded answers from every average.
-SCORABLE = {"response_generated", "response_without_citations"}
+# An answer whose citations were all removed, or one written after a search did not finish, is
+# still judged: the physician sees it all the same, and skipping it would drop it from every average.
+SCORABLE = {"response_generated", "response_without_citations", "retrieval_incomplete"}
 
 
 def load_cases(run, workbook):
