@@ -154,7 +154,7 @@ class AgenticRAGEngine:
 
         Groups FAISS and KB tasks that share the same subtopic query together,
         so each logical subtopic gets chunks from BOTH sources merged before reranking.
-        Each topic → rerank all sources together → top complex_rerank_top_k=3 chunks.
+        Each topic → rerank all its candidates → top complex_rerank_top_k=3 chunks that no earlier topic took.
 
         Example for "Compare SBRT vs EBRT":
           Tasks: [Guidelines]SBRT, [Trial papers]SBRT, [Guidelines]EBRT, [Trial papers]EBRT
@@ -177,28 +177,21 @@ class AgenticRAGEngine:
                     }
                 chunks_by_topic[topic_key]["chunks"].extend(task.retrieved_chunks)
 
-        # ── Deduplicate across all topics (by faiss_id) ──
-        all_seen_ids = set()
-        deduped_by_topic = {}
+        # ── Rerank per topic: FAISS + KB chunks together, then take the top ones no earlier topic took ──
+        # ⚠️ Repeats across topics are removed after reranking, not before. Removing them first took every
+        # candidate of an earlier topic, including the ones its reranking dropped, out of later topics' pools.
+        reranked_by_topic = {}
+        taken = set()  # passages already given to an earlier topic
 
         for topic_key, data in chunks_by_topic.items():
-            deduped = []
+            label = data["label"]
+            # Repeats inside one topic (the same passage found by two searches) go before reranking
+            chunks, seen_ids = [], set()
             for chunk in data["chunks"]:
                 chunk_id = self._chunk_key(chunk)
-                if chunk_id not in all_seen_ids:
-                    deduped.append(chunk)
-                    all_seen_ids.add(chunk_id)
-            deduped_by_topic[topic_key] = {
-                "label": data["label"],
-                "chunks": deduped
-            }
-
-        # ── Rerank per topic: FAISS + KB chunks together → top 5 ──
-        reranked_by_topic = {}
-
-        for topic_key, data in deduped_by_topic.items():
-            label = data["label"]
-            chunks = data["chunks"]
+                if chunk_id not in seen_ids:
+                    chunks.append(chunk)
+                    seen_ids.add(chunk_id)
 
             if not chunks:
                 reranked_by_topic[topic_key] = []
@@ -220,17 +213,19 @@ class AgenticRAGEngine:
                     s3_location=chunk.get("s3_location", "")
                 ))
 
-            # Rerank all chunks for this topic (FAISS + KB combined) → top k
+            # Rank every candidate for this topic (FAISS + KB combined); the cut to top k comes after the repeats
             reranked = self.retriever.rerank(
                 f"{plan.original_query} {label}",
                 chunk_objects,
-                top_k=self.config.retriever.complex_rerank_top_k
+                top_k=len(chunk_objects)
             )
 
-            # Convert back to dict format preserving all fields
+            # Convert back to dict format preserving all fields, skipping passages an earlier topic took
             final_chunks = []
             for chunk in reranked:
-                final_chunks.append({
+                if len(final_chunks) == self.config.retriever.complex_rerank_top_k:
+                    break
+                candidate = {
                     "faiss_id": chunk.faiss_id,
                     "chunk_id": chunk.chunk_id,
                     "text": chunk.text,
@@ -241,7 +236,11 @@ class AgenticRAGEngine:
                     "source_type": chunk.source_type,
                     "document_title": chunk.document_title,
                     "s3_location": chunk.s3_location
-                })
+                }
+                # 💡 A passage an earlier topic took is skipped, so the next one in this topic's ranking fills the place
+                if self._chunk_key(candidate) not in taken:
+                    final_chunks.append(candidate)
+                    taken.add(self._chunk_key(candidate))
 
             reranked_by_topic[topic_key] = final_chunks
 
