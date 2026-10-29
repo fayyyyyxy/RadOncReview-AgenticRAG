@@ -108,7 +108,9 @@ call uses the web app's model from config.py (Llama 3.3 70B) by default; pass
 --model to choose another. Llama, Claude and Titan models keep their own
 request formats; any other Bedrock model (for example us.openai.gpt-5.6-terra)
 goes through the Converse API, without temperature and top_p if it rejects
-them. A reply cut off at the token limit is noted in the case's engine log.
+them, with a token limit of 8192 (converse_max_tokens in config.py) instead of
+Llama's 2048, since a reasoning model's thinking counts toward the limit. A
+reply cut off at the token limit is noted in the case's engine log.
 
 Each run has its own ignored folder, outputs/<name>_answers/ when --name is
 given (for example --name site-filter), otherwise outputs/baseline_<timestamp>_<id>/, with

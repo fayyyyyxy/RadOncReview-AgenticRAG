@@ -122,7 +122,7 @@ class BedrockLLMClient(BaseLLMClient):
         request = {
             "modelId": self.config.model_id,
             "messages": [{"role": "user", "content": [{"text": prompt}]}],
-            "inferenceConfig": {"maxTokens": self.config.max_tokens, **self._sampling},
+            "inferenceConfig": {"maxTokens": self.config.converse_max_tokens, **self._sampling},
         }
         if system_prompt:
             request["system"] = [{"text": system_prompt}]
@@ -133,11 +133,11 @@ class BedrockLLMClient(BaseLLMClient):
             if not self._sampling or not re.search(r"temperature|top_?p", str(exc), re.IGNORECASE):
                 raise
             self._sampling = {}
-            request["inferenceConfig"] = {"maxTokens": self.config.max_tokens}
+            request["inferenceConfig"] = {"maxTokens": self.config.converse_max_tokens}
             response = self.client.converse(**request)
         if response.get("stopReason") == "max_tokens":
             # Reasoning models spend part of maxTokens before writing, so a cut-off reply is logged, not hidden
-            print(f"Converse reply cut off at maxTokens={self.config.max_tokens} ({self.config.model_id})")
+            print(f"Converse reply cut off at maxTokens={self.config.converse_max_tokens} ({self.config.model_id})")
         # 💡 Reasoning blocks carry no "text" key, so only the written reply is joined
         return "".join(block.get("text", "") for block in response["output"]["message"]["content"])
 

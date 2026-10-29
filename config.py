@@ -43,6 +43,9 @@ class LLMConfig:
     # Llama 3.3 70B through the US cross-region inference profile; baseline runs use it too (patient_cases/run_baseline.py)
     model_id: str = "us.meta.llama3-3-70b-instruct-v1:0"
     max_tokens: int = 2048  # Llama max_gen_len
+    # ⚠️ Models sent through Converse (GPT-5.x) may reason before writing, and that counts toward the limit;
+    # at 2048, 9 of 40 GPT-5.6 Terra rewrites were cut off mid-answer
+    converse_max_tokens: int = 8192
     temperature: float = 0.1  # Low temperature for factual responses
     top_p: float = 0.9
 
