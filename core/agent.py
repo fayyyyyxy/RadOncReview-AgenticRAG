@@ -540,7 +540,7 @@ class AgenticRAGEngine:
             synthesis_requests=list(self.synthesizer.requests),
             routing={
                 "labels": vars(labels),
-                "planning_mode": "source_anchored_llm_v1" if self.config.features.versioned_planning else "llm",
+                "planning_mode": plan.planning.get("mode", "llm"),
                 "planning_events": planning_events,
                 "site_filter": self.config.features.site_filter,
                 "review_note_categories": sorted(scope.review_note_categories)

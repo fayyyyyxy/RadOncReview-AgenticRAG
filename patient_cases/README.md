@@ -229,28 +229,51 @@ workbook corpus is known; the baseline runner does this automatically.
 
 ## Flexible versioned LLM planning (opt-in)
 
-`--versioned-planning` lets the LLM extract arbitrary requested information
-needs, rather than matching the earlier fixed topic vocabulary. Each need
-must quote the question exactly; follow-up needs may also quote explicit
-critique feedback. The application constructs focused queries from these
-quotes plus the complete original patient input, and searches both existing
-clinical backends. The prompt asks the model to apply generic citation requests
-to every topic rather than create a separate citation-only topic. That semantic
-instruction is not mechanically guaranteed; inspect the saved requirements.
+`--versioned-planning` separates **patient facts**, **information needs** and
+**search language**. The current schema is `source_anchored_llm_v2`:
+
+- A requirement has a normalized `need`, `kind` (`explicit` or `inferred`),
+  and exact provenance quotes in `anchors`. Anchors may quote the question
+  or vignette; follow-ups may also quote supplied critique feedback. Inferred
+  research needs require an `inference_reason`; they are not patient facts.
+- Each topic supplies `search_terms`, which may use clinical synonyms,
+  abbreviations and standard terminology absent from the original wording.
+  For example, a reference to previous radiation may motivate a research
+  concept such as “re-irradiation.” No fixed topic vocabulary is imposed.
+- Each topic selects `context_ids` from a catalog of original sentences/lines,
+  with a `context_reason`. The application copies those sentences verbatim
+  into that search, preserving their wording, including negations and temporal
+  qualifiers. It does not append the complete case automatically. The prompt
+  asks for current-condition context and relevant prior treatment while
+  omitting unrelated history. General conceptual searches may select no context.
+
+Both existing clinical backends receive each constructed query. The full
+original case remains on `TaskPlan.original_query` and goes to the writer and
+critic. All context units, including omitted sentences, remain in planning
+metadata for review. A missing or incorrectly selected context sentence can
+still harm retrieval; source copying alone does not establish correct routing.
 
 Initial plans allow up to six topics by default, and follow-ups up to three
-(`config.features.max_planning_topics` / `max_followup_topics`). When the
-declared needs fit the budget, the application schedules one topic per need
-so the model cannot collapse them back into one broad search. Above the
-budget, it keeps the model's validated grouping without dropping needs.
-An oversized topic list is rejected, never silently truncated. Source quotes
-bundling a list (two or more commas/semicolons) are rejected for a more granular
-extraction; this is a structural heuristic, not semantic understanding.
-Every declared need must map to exactly one topic. This
-validates structure, source anchoring and **declared** coverage, not whether
-the LLM identified every semantic requirement or made a medically correct
-plan. Source anchoring does not solve the condition-routing problems found
-in the earlier relevance audit.
+(`config.features.max_planning_topics` / `max_followup_topics`). The prompt asks
+for separate searches for independently answerable needs. Inseparable needs or
+needs grouped to fit the budget may share a search with a recorded
+`grouping_reason`; the application no longer
+forces one search per requirement or rejects provenance quotes based on comma
+counts. Every declared need must map to exactly one topic. Oversized topic
+lists, unknown context IDs, invented provenance quotes and duplicate searches
+are rejected rather than silently truncated. Unsupported standalone numbers
+in generated search terms are rejected against that topic's original context
+and non-feedback anchors; this catches some invented doses but is not a
+semantic clinical validator. Digits inside standard terms such as EQD2 are
+not treated as a new patient dose.
+
+Validation checks structure, provenance, verbatim context selection and
+**declared** coverage. It does not establish that all needs were identified,
+that a synonym or inferred need is medically appropriate, that selected context
+is complete, or that condition routing is correct. The prompt forbids invented
+patient facts and asks that citation requests apply across topics; those semantic
+instructions are not mechanically guaranteed. Inspect the recorded plan and
+the actual passages. The earlier relevance-audit problems remain open.
 
 ```bash
 # Validate inputs without AWS/model calls.
@@ -277,7 +300,10 @@ entry. Cached identities and payloads are checked on read; corruption raises
 an error. A per-key POSIX file lock and atomic write prevent concurrent misses
 from publishing different plans. New files have owner-only permissions.
 
-Cache records preserve source-anchored requirements, topic mappings, rationale,
+The v2 schema/version and changed implementation invalidate earlier v1 plan
+keys automatically. Old files can remain local but are not used by v2 runs.
+Cache records preserve provenance, explicit/inferred needs, search terms,
+selected context IDs and their reasons, topic mappings, rationale,
 generation timestamp, model settings, system prompt and planning attempts.
 `TaskPlan.planning` records cache status, hashes, call count and validation
 scope; `AgentResponse.routing.planning_events` preserves both initial and

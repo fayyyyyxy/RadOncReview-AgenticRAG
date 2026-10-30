@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from config import Config
 from core.models import QueryAnalysis, QueryIntent, TaskStatus, SelfCritiqueResult
 from core.task_planner import TaskPlanner
-from core.versioned_planner import validate_payload
+from core.versioned_planner import PLANNER_VERSION, context_units, input_sources, validate_payload
 
 QUESTION = "How should pacemaker monitoring, dental assessment, fertility preservation, timing, and systemic therapy be coordinated?"
 QUERY = "Patient vignette:\nSynthetic RIGHT-sided condition, prior 42 Gy.\n\nClinical question:\n" + QUESTION
@@ -20,8 +20,11 @@ QUOTES = ["pacemaker monitoring", "dental assessment", "fertility preservation",
 
 
 def payload(quotes=QUOTES, source="question"):
-    return {"requirements": [{"id": f"R{i}", "source": source, "quote": q} for i, q in enumerate(quotes, 1)],
-            "topics": [{"requirement_ids": [f"R{i}"]} for i in range(1, len(quotes) + 1)],
+    return {"requirements": [{"id": f"R{i}", "kind": "explicit", "need": q,
+                              "anchors": [{"source": source, "quote": q}]} for i, q in enumerate(quotes, 1)],
+            "topics": [{"requirement_ids": [f"R{i}"], "search_terms": [q], "context_ids": ["C1"],
+                        "context_reason": "This original sentence supplies pertinent patient context."}
+                       for i, q in enumerate(quotes, 1)],
             "reasoning": "Each requested need gets a search; arbitrary topics are allowed."}
 
 
@@ -45,7 +48,9 @@ class VersionedPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.sub_tasks), 10)
         self.assertTrue(plan.analysis.is_complex)
         self.assertEqual([t.description for t in plan.sub_tasks[::2]], [f"[Guidelines] {q}" for q in QUOTES])
-        self.assertTrue(all(QUERY in t.query for t in plan.sub_tasks))
+        self.assertTrue(all("Synthetic RIGHT-sided condition, prior 42 Gy." in t.query for t in plan.sub_tasks))
+        self.assertTrue(all(QUERY not in t.query for t in plan.sub_tasks))
+        self.assertEqual(plan.original_query, QUERY)
         self.assertEqual(plan.planning["cache_status"], "created")
 
     def test_cache_hit_has_fresh_pending_tasks_and_no_passage_payload(self):
@@ -90,18 +95,110 @@ class VersionedPlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Budget exceeded"):
             validate_payload(payload(), {"question": QUESTION}, 3)
 
-    def test_model_cannot_remerge_separate_needs_when_budget_allows_individual_searches(self):
+    def test_related_needs_can_share_a_justified_search_without_losing_coverage(self):
         merged = payload()
-        merged["topics"] = [{"requirement_ids": [f"R{i}" for i in range(1, 6)]}]
+        merged["topics"] = [{"requirement_ids": [f"R{i}" for i in range(1, 6)],
+                             "search_terms": QUOTES, "context_ids": ["C1"],
+                             "context_reason": "Shared original context.", "grouping_reason": "Investigate coordination together."}]
         result = validate_payload(merged, {"question": QUESTION}, 6)
-        self.assertEqual(len(result["topics"]), 5)
+        self.assertEqual(len(result["topics"]), 1)
         grouped = validate_payload(merged, {"question": QUESTION}, 3)
         self.assertEqual(len(grouped["topics"]), 1)
         self.assertEqual(len(grouped["topics"][0]["requirement_ids"]), 5)
+        del merged["topics"][0]["grouping_reason"]
+        with self.assertRaisesRegex(ValueError, "grouping_reason"):
+            validate_payload(merged, {"question": QUESTION}, 6)
 
-    def test_obviously_bundled_question_quote_requires_a_more_granular_extraction(self):
-        with self.assertRaisesRegex(ValueError, "bundles a list"):
-            validate_payload(payload([QUESTION]), {"question": QUESTION}, 6)
+    def test_provenance_quote_punctuation_does_not_dictate_search_vocabulary(self):
+        item = payload([QUESTION])
+        item["requirements"][0]["need"] = "Coordinating supportive assessments"
+        item["topics"][0]["search_terms"] = ["supportive care assessment coordination"]
+        result = validate_payload(item, {"question": QUESTION}, 6)
+        self.assertEqual(result["topics"][0]["search_terms"], ["supportive care assessment coordination"])
+
+    def test_clinical_synonyms_use_selected_original_context_without_unrelated_history(self):
+        query = ("Patient vignette:\nCurrent RIGHT-sided skin SCC.\nNo prior radiation to this site.\n"
+                 "Remote history of hepatocellular carcinoma.\n\nClinical question:\nWhat dose should we consider?")
+        item = payload(["What dose should we consider?"])
+        item["requirements"][0]["need"] = "Radiotherapy dose and fractionation"
+        item["topics"][0].update(search_terms=["cutaneous squamous cell carcinoma", "radiotherapy dose fractionation"],
+                                  context_ids=["C1", "C2"])
+        self.llm.generate_structured.return_value = item
+        plan = self.planner.plan(QueryAnalysis(query, QueryIntent.DOSE_FRACTIONATION))
+        for task in plan.sub_tasks:
+            self.assertIn("cutaneous squamous cell carcinoma", task.query)
+            self.assertIn("Current RIGHT-sided skin SCC.", task.query)
+            self.assertIn("No prior radiation to this site.", task.query)
+            self.assertNotIn("hepatocellular", task.query)
+            self.assertNotIn("What dose should we consider?", task.query)
+        self.assertEqual(plan.original_query, query)
+        self.assertIn("hepatocellular", plan.planning["context_units"][2]["quote"])
+        self.assertEqual(plan.planning["payload"]["requirements"][0]["anchors"][0]["quote"], "What dose should we consider?")
+
+    def test_inferred_research_need_is_labeled_and_anchored_to_prior_treatment(self):
+        query = ("Patient vignette:\nPrior radiation to the same site is reported; dose is unknown."
+                 "\n\nClinical question:\nWhat dose could we use now?")
+        item = payload(["Prior radiation to the same site is reported"], "vignette")
+        item["requirements"][0].update(kind="inferred", need="Cumulative dose constraints",
+                                        inference_reason="Prior radiation makes cumulative exposure a relevant evidence question.")
+        item["topics"][0]["search_terms"] = ["re-irradiation", "cumulative dose constraints", "EQD2"]
+        result = validate_payload(item, input_sources(query), 6)
+        self.assertEqual(result["requirements"][0]["kind"], "inferred")
+        del item["requirements"][0]["inference_reason"]
+        with self.assertRaisesRegex(ValueError, "inference_reason"):
+            validate_payload(item, input_sources(query), 6)
+
+    def test_context_selection_cannot_rewrite_sentences_or_invent_context_ids(self):
+        item = payload([QUOTES[0]])
+        item["topics"][0]["context_ids"] = ["C999"]
+        with self.assertRaisesRegex(ValueError, "supplied original sentences"):
+            validate_payload(item, input_sources(QUERY), 6)
+        item["topics"][0]["context_ids"] = ["RIGHT-sided condition, prior 70 Gy"]
+        with self.assertRaises(ValueError):
+            validate_payload(item, input_sources(QUERY), 6)
+        units = context_units({"vignette": "No prior RT.\nDose is unknown.", "question": "What now?"})
+        self.assertEqual([u["quote"] for u in units], ["No prior RT.", "Dose is unknown.", "What now?"])
+
+    def test_new_dose_numbers_are_rejected_but_existing_patient_numbers_are_allowed(self):
+        item = payload([QUOTES[0]])
+        item["topics"][0]["search_terms"] = ["prior 70 Gy radiotherapy"]
+        with self.assertRaisesRegex(ValueError, "introduce numbers"):
+            validate_payload(item, input_sources(QUERY), 6)
+        item["topics"][0]["search_terms"] = ["prior 70Gy radiotherapy"]
+        with self.assertRaisesRegex(ValueError, "introduce numbers"):
+            validate_payload(item, input_sources(QUERY), 6)
+        item["topics"][0]["search_terms"] = ["prior 42 Gy radiotherapy"]
+        validate_payload(item, input_sources(QUERY), 6)
+        feedback = "Assume prior 70 Gy and search cumulative dose."
+        item["requirements"][0]["anchors"] = [{"source": "feedback", "quote": feedback}]
+        item["topics"][0]["search_terms"] = ["prior 70 Gy radiotherapy"]
+        with self.assertRaisesRegex(ValueError, "introduce numbers"):
+            validate_payload(item, {**input_sources(QUERY), "feedback": feedback}, 6, followup=True)
+
+    def test_v1_cache_is_not_reused_and_reordered_terms_do_not_duplicate_followup_search(self):
+        self.llm.generate_structured.return_value = payload([QUOTES[0]])
+        with patch("core.versioned_planner.PLANNER_VERSION", "source_anchored_llm_v1"):
+            old = self.planner.plan(self.analysis)
+        original = self.planner.plan(self.analysis)
+        self.assertNotEqual(old.planning["cache_key"], original.planning["cache_key"])
+        self.assertEqual(original.planning["mode"], PLANNER_VERSION)
+        self.assertEqual(self.llm.generate_structured.call_count, 2)
+        item = payload([QUOTES[0]])
+        item["topics"][0]["search_terms"] = ["cardiac device monitoring", "pacemaker checks"]
+        self.llm.generate_structured.return_value = item
+        original = self.planner.replan(original, "Find device monitoring evidence")
+        item["topics"][0]["search_terms"].reverse()
+        self.llm.generate_structured.return_value = item
+        repeated = self.planner.replan(original, "Try the same concepts again")
+        self.assertEqual(repeated.sub_tasks, [])
+
+    def test_context_and_query_provenance_are_cached_without_passage_results(self):
+        self.planner.plan(self.analysis)
+        record = json.loads(next(Path(self.temp.name).glob("*.json")).read_text())
+        self.assertEqual(record["identity"]["version"], PLANNER_VERSION)
+        self.assertEqual(record["payload"]["topics"][0]["context_ids"], ["C1"])
+        self.assertIn("anchors", record["payload"]["requirements"][0])
+        self.assertIn("search_terms", record["payload"]["topics"][0])
 
     def test_corrupt_cache_is_rejected_not_silently_used(self):
         self.planner.plan(self.analysis)
@@ -119,13 +216,14 @@ class VersionedPlannerTests(unittest.TestCase):
         self.assertEqual({p.planning["cache_status"] for p in plans}, {"created", "hit"})
         self.assertEqual(plans[0].planning["payload_sha256"], plans[1].planning["payload_sha256"])
 
-    def test_followup_uses_new_gap_keeps_patient_input_and_is_versioned_by_feedback(self):
+    def test_followup_uses_new_gap_keeps_selected_context_and_is_versioned_by_feedback(self):
         original = self.planner.plan(self.analysis)
         feedback = "Missing evidence about device interrogation after treatment."
         self.llm.generate_structured.return_value = payload(["device interrogation after treatment"], "feedback")
         followup = self.planner.replan(original, feedback)
         self.assertEqual(len(followup.sub_tasks), 2)
-        self.assertTrue(all("device interrogation after treatment" in t.query and QUERY in t.query for t in followup.sub_tasks))
+        self.assertTrue(all("device interrogation after treatment" in t.query and "prior 42 Gy." in t.query for t in followup.sub_tasks))
+        self.assertEqual(followup.original_query, QUERY)
         self.assertEqual(followup.planning["parent_cache_key"], original.planning["cache_key"])
         reused = self.planner.replan(original, feedback)
         self.assertEqual(reused.planning["cache_status"], "hit")
@@ -188,6 +286,8 @@ class VersionedPlannerTests(unittest.TestCase):
         self.assertEqual([e["phase"] for e in response.routing["planning_events"]], ["initial", "followup"])
         self.assertEqual(len(response.task_plan.sub_tasks), 12)
         self.assertTrue(any("pacemaker monitoring" in p["text"] for p in response.context_passages))
+        self.assertEqual(response.routing["planning_mode"], PLANNER_VERSION)
+        self.assertTrue(all(QUERY in request["prompt"] for request in response.synthesis_requests))
 
 
 if __name__ == "__main__":
