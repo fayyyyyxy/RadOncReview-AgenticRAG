@@ -307,7 +307,7 @@ from publishing different plans. New files have owner-only permissions.
 The versioned planner accepts verified paraphrases of initial requests. There
 is one cache behavior, with no exact-input-only mode. Repeating a saved wording
 needs no model call. For new wording, the planner considers up to three
-compatible saved plans from the 128 most recently modified cache records.
+compatible saved plans from the 128 most recently used cache records.
 Model/settings, planning budgets, prompts and relevant implementation/policy
 hashes must match. Conservative checks reject changed numbers, quantities,
 laterality, sex, explicit stage markers, negation or uncertainty before model
@@ -329,7 +329,7 @@ is saved as an alias inside the original record, not another full plan file.
 Repeating that wording gives `paraphrase_alias_hit` without any LLM call.
 At most 16 aliases are retained per plan (`paraphrase_cache_aliases`); old
 aliases are evicted in insertion order. New patient cases still create new
-records; global expiration/disk-size eviction is not implemented here.
+records, subject to the global budget and expiration policy below.
 Request locks use 256 shared slots to avoid a new lock file per wording.
 Alias updates are locked and atomic, and alias identities, verification data
 and adapted-payload hashes are checked on reuse. Concurrent requests for the
@@ -346,6 +346,65 @@ This reuses the search structure, not passages or answers. Verbatim patient
 context can differ after rewording, so identical retrieved passages across
 paraphrases are not guaranteed. Full current input remains available to the
 writer. Validate paraphrases and clinical near misses before production use.
+
+### Cache size, expiry and retained audits
+
+The disposable plan cache has a default **100,000,000-byte (100 MB)** budget
+and **30-day lifetime** (`plan_cache_max_bytes`, `plan_cache_ttl_days`).
+Canonical records, their aliases, and the small `.cache-index` metadata file
+count toward the budget. File-content bytes are counted, not filesystem block
+allocation. Unrelated files are preserved and reported as unmanaged storage.
+
+Expiration runs from the canonical plan's creation time. Accesses and added
+aliases do not extend that deadline. Exact reads and verified alias reads do
+refresh the canonical plan's recency for LRU eviction. Expired plans are never
+reused; cleanup runs during cache operations or an explicit prune, rather
+than a background timer. Aliases expire/evict together with their source plan.
+
+Cleanup removes expired entries first. If the cache exceeds its budget,
+entries from incompatible planner/prompt/code revisions are removed before
+current-revision entries; within each group the least recently used plans go
+first. A short shared I/O lock protects reads, atomic writes, alias updates,
+the index and eviction. Model calls do not hold that lock. A source evicted
+during equivalence checking causes a fresh plan instead of a stale reuse.
+Abandoned temporary cache writes are also removed under the same lock.
+
+A validated plan larger than the whole budget still executes in memory with
+`cache_status=created_not_cached`. An oversized alias update preserves its
+source and returns `paraphrase_hit_not_cached`; it will require verification
+again next time. Neither path silently raises the storage limit.
+
+Audit retention is **explicit**, not an automatic copy of every request.
+`VersionedPlanner.retain_for_review(plan, note=...)` saves a self-contained
+planning snapshot outside the cache. It includes the available canonical
+record, generation attempts, aliases, current request, queries and verification
+provenance; retrieved evidence is excluded. A saved TaskPlan can still be
+retained if its disposable source is already gone, with `source_record=null`.
+By default audits live in the separate sibling `<cache-folder>_audits`;
+`plan_audit_path` can override it. Overlapping audit/cache directories are
+rejected. Audit files have owner-only permissions and cache maintenance never
+expires, evicts, or traverses that folder. Intentional audits have their own
+retention responsibility and are excluded from the disposable cache budget.
+
+The local utility makes no AWS/model calls. Inspection is the default and
+does not prune. Retain anything needed for review before manually pruning:
+
+```bash
+python patient_cases/manage_plan_cache.py
+python patient_cases/manage_plan_cache.py --retain CACHE_KEY --note "Keep for review"
+python patient_cases/manage_plan_cache.py --prune
+
+# Experiment-specific folders and optional policy overrides.
+python patient_cases/manage_plan_cache.py --plan-cache path/to/plans --prune \
+  --max-bytes 100000000 --ttl-days 30
+```
+
+Retention accepts either a canonical key or a still-saved alias key.
+Separate evaluation outputs and source clinical data are never cache-eviction
+targets. Existing plan files are indexed lazily; an index can be rebuilt
+without deleting current valid records. Existing `.json` files named with
+64-character plan hashes are disposable cache records, so explicitly retain
+any such records needed as permanent audits before applying cleanup.
 
 ### Cache provenance and fallbacks
 

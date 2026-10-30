@@ -118,6 +118,9 @@ class FeatureConfig:
     past_case_source_sha256: Optional[str] = None
     versioned_planning: bool = False  # flexible LLM plans, validated and reused; not passage caching
     plan_cache_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/search_plans")
+    plan_cache_max_bytes: int = 100_000_000
+    plan_cache_ttl_days: float = 30
+    plan_audit_path: Optional[str] = None  # defaults to a separate sibling <cache-folder>_audits
     max_planning_topics: int = 6
     max_followup_topics: int = 3
     paraphrase_cache_candidates: int = 3

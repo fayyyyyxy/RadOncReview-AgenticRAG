@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import Mock
@@ -184,5 +185,58 @@ class ParaphraseTests(unittest.TestCase):
         path.write_text(json.dumps(record))
         with self.assertRaisesRegex(ValueError, 'verification is corrupted'):
             self.planner.plan(self.analysis(NEW))
+
+    def test_cleanup_during_verification_replans_instead_of_reusing_a_deleted_source(self):
+        def response(prompt, **kwargs):
+            if 'Determine whether CURRENT' in prompt:
+                limit = self.planner.cache.max_bytes
+                self.planner.cache.max_bytes = 1
+                self.planner.cache.maintain(self.planner.revision_identity())
+                self.planner.cache.max_bytes = limit
+                return self.proof()
+            return plan_payload()
+        self.llm.generate_structured.side_effect = response
+        result = self.planner.plan(self.analysis(NEW))
+        self.assertEqual(result.planning['cache_status'], 'created')
+        self.assertEqual(result.planning['llm_calls'], 2)
+        self.assertIn('evicted during verification', result.planning['paraphrase_miss_reason'])
+
+    def test_alias_reads_refresh_the_canonical_plans_recency(self):
+        self.llm.generate_structured.return_value = self.proof()
+        self.planner.plan(self.analysis(NEW))
+        path = next(Path(self.tmp.name).glob('*.json'))
+        before = path.stat().st_mtime_ns
+        self.planner.cache.clock = lambda: before/1_000_000_000 + 60
+        self.planner.plan(self.analysis(NEW))
+        self.assertGreater(path.stat().st_mtime_ns, before)
+
+    def test_saved_alias_expires_with_its_canonical_plan(self):
+        self.llm.generate_structured.return_value = self.proof()
+        self.planner.plan(self.analysis(NEW))
+        path = next(Path(self.tmp.name).glob('*.json'))
+        record = json.loads(path.read_text())
+        record['created_at'] = '2000-01-01T00:00:00+00:00'
+        path.write_text(json.dumps(record))
+        self.llm.reset_mock()
+        self.llm.generate_structured.return_value = plan_payload()
+        repeated = self.planner.plan(self.analysis(NEW))
+        self.assertEqual(repeated.planning['cache_status'], 'created')
+        self.assertEqual(repeated.planning['paraphrase_check_calls'], 0)
+        self.llm.generate_structured.assert_called_once()
+
+    def test_audit_can_be_retained_by_alias_key_and_survives_cache_cleanup(self):
+        self.llm.generate_structured.return_value = self.proof()
+        result = self.planner.plan(self.analysis(NEW))
+        # Keep audits inside the test root, but outside its disposable cache directory.
+        self.planner.cache.audit_folder = Path(self.tmp.name).parent/(Path(self.tmp.name).name + '_review')
+        self.addCleanup(shutil.rmtree, self.planner.cache.audit_folder, ignore_errors=True)
+        audit = self.planner.cache.retain(result.planning['cache_key'], 'Keep this wording for review')
+        saved = json.loads(audit.read_text())
+        self.assertEqual(saved['source_cache_key'], self.original.planning['cache_key'])
+        self.assertEqual(saved['requested_key'], result.planning['cache_key'])
+        self.assertEqual(saved['source_record']['paraphrases'][0]['verification'], self.proof())
+        self.planner.cache.max_bytes = 1
+        self.planner.cache.maintain(self.planner.revision_identity())
+        self.assertTrue(audit.exists())
 
 if __name__ == '__main__': unittest.main()

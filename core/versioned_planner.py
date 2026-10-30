@@ -217,6 +217,32 @@ class VersionedPlanner:
             raise ValueError("Planning budgets must be 1–8 initial topics and 1–4 follow-up topics")
         if not 1 <= config.features.paraphrase_cache_candidates <= 8 or not 1 <= config.features.paraphrase_cache_aliases <= 64:
             raise ValueError("Paraphrase cache allows 1–8 candidates and 1–64 aliases per plan")
+        from .plan_cache import PlanCache
+        self.cache = PlanCache(self.folder, config.features.plan_cache_max_bytes,
+                               config.features.plan_cache_ttl_days, config.features.plan_audit_path)
+
+    def revision_identity(self):
+        from .plan_paraphrases import POLICY_VERSION, SYSTEM as PARAPHRASE_SYSTEM, PROMPT as PARAPHRASE_PROMPT
+        return {'version': PLANNER_VERSION,
+                'code_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                'llm_client_sha256': hashlib.sha256(Path(__file__).with_name('llm_client.py').read_bytes()).hexdigest(),
+                'prompt_sha256': digest([SYSTEM, PROMPT]),
+                'paraphrase_policy': {
+                    'version': POLICY_VERSION,
+                    'code_sha256': hashlib.sha256(Path(__file__).with_name('plan_paraphrases.py').read_bytes()).hexdigest(),
+                    'prompt_sha256': digest([PARAPHRASE_SYSTEM, PARAPHRASE_PROMPT]),
+                    'analysis_code_sha256': hashlib.sha256(Path(__file__).with_name('query_analyzer.py').read_bytes()).hexdigest(),
+                    'max_candidates': self.config.features.paraphrase_cache_candidates,
+                    'max_aliases': self.config.features.paraphrase_cache_aliases,
+                }}
+
+    def retain_for_review(self, plan, note=''):
+        """Explicitly retain planning provenance, without retrieved passages, outside the cache."""
+        snapshot = {'plan_id': plan.plan_id, 'original_query': plan.original_query, 'analysis': asdict(plan.analysis),
+                    'planning': plan.planning, 'reasoning': plan.reasoning,
+                    'sub_tasks': [{'query': t.query, 'description': t.description,
+                                   'strategy': t.retrieval_strategy.value, 'top_k': t.top_k} for t in plan.sub_tasks]}
+        return self.cache.retain(plan.planning.get('cache_source_key', plan.planning['cache_key']), note, snapshot)
 
     def plan(self, analysis, parent=None, feedback=None):
         followup = parent is not None
@@ -229,30 +255,18 @@ class VersionedPlanner:
         if followup:
             sources["feedback"] = feedback
         budget = self.config.features.max_followup_topics if followup else self.config.features.max_planning_topics
-        identity = {"version": PLANNER_VERSION, "code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                    "llm_client_sha256": hashlib.sha256(Path(__file__).with_name("llm_client.py").read_bytes()).hexdigest(),
-                    "prompt_sha256": digest([SYSTEM, PROMPT]), "original_input": analysis.original_query,
+        identity = {**self.revision_identity(), "original_input": analysis.original_query,
                     "analysis": asdict(analysis), "model": asdict(self.config.llm),
                     "retriever": asdict(self.config.retriever), "max_topics": budget,
                     "phase": "followup" if followup else "initial", "feedback": feedback,
                     "parent_plan_sha256": parent.planning["payload_sha256"] if followup else None}
-        from .plan_paraphrases import POLICY_VERSION, SYSTEM as PARAPHRASE_SYSTEM, PROMPT as PARAPHRASE_PROMPT
-        identity['paraphrase_policy'] = {
-            'version': POLICY_VERSION,
-            'code_sha256': hashlib.sha256(Path(__file__).with_name('plan_paraphrases.py').read_bytes()).hexdigest(),
-            'prompt_sha256': digest([PARAPHRASE_SYSTEM, PARAPHRASE_PROMPT]),
-            'analysis_code_sha256': hashlib.sha256(Path(__file__).with_name('query_analyzer.py').read_bytes()).hexdigest(),
-            'max_candidates': self.config.features.paraphrase_cache_candidates,
-            'max_aliases': self.config.features.paraphrase_cache_aliases,
-        }
         key = digest(identity)
-        path = self.folder / f"{key}.json"
-        calls, error, reuse, attempts = 0, None, None, []
+        calls, error, reuse, attempts, storage = 0, None, None, [], None
         # Bound lock-file growth for arbitrarily many paraphrased requests.
         lock_key = 'requests-' + key[:2]
         with cache_lock(self.folder, lock_key):
-            if path.exists():
-                record = json.loads(path.read_text())
+            record = self.cache.load(key, identity)
+            if record is not None:
                 if record.get("cache_key") != key or digest(record.get("identity")) != key:
                     raise ValueError("Cached planning identity is corrupted")
                 payload = validate_payload(record.get("payload"), sources, budget, followup)
@@ -262,7 +276,7 @@ class VersionedPlanner:
             else:
                 if not followup:
                     from .plan_paraphrases import find_reusable_plan
-                    reuse = find_reusable_plan(self.folder, identity, sources, budget, self.llm,
+                    reuse = find_reusable_plan(self.cache, identity, sources, budget, self.llm,
                                                max_candidates=self.config.features.paraphrase_cache_candidates,
                                                max_aliases=self.config.features.paraphrase_cache_aliases)
                     calls += reuse.get('calls', 0) if reuse else 0
@@ -300,14 +314,8 @@ class VersionedPlanner:
                     else:
                         record = {"cache_key": key, "identity": identity, "payload": payload, "payload_sha256": digest(payload),
                                   "created_at": datetime.now(timezone.utc).isoformat(), "system_prompt": SYSTEM, "attempts": attempts}
-                        tmp = self.folder / f".{key}.{uuid.uuid4().hex}.tmp"
-                        try:
-                            with os.fdopen(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as handle:
-                                json.dump(record, handle, ensure_ascii=False, indent=2, default=lambda x: x.value if isinstance(x, Enum) else str(x))
-                            os.replace(tmp, path)
-                        finally:
-                            tmp.unlink(missing_ok=True)
-                        status = "created"
+                        storage = self.cache.store(key, record, identity)
+                        status = 'created' if storage['stored'] else 'created_not_cached'
         requirements = {r["id"]: r for r in payload["requirements"]}
         tasks, skipped = [], []
         old_queries = {t.query for t in parent.sub_tasks} if followup else set()
@@ -340,6 +348,7 @@ class VersionedPlanner:
         metadata['cache_source_key'] = reuse.get('source_key', key) if reuse else key
         metadata['paraphrase_verification'] = reuse.get('verification') if reuse else None
         metadata['paraphrase_miss_reason'] = reuse.get('miss_reason') if reuse else None
+        metadata['cache_storage'] = storage or (reuse.get('storage') if reuse else None)
         print(f"Versioned planner: {identity['phase']} cache={status} key={key[:12]} topics={len(tasks)//2} llm_calls={calls}")
         planned_analysis = replace(analysis, is_complex=True) if not followup and len(payload["topics"]) > 1 else analysis
         return TaskPlan(plan_id=f"plan_{uuid.uuid4().hex[:8]}", original_query=analysis.original_query,
