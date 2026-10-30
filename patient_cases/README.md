@@ -295,10 +295,59 @@ Plans contain clinical input and feedback: keep them local and ignored.
 Cache keys include exact patient input, analysis, model/sampling settings,
 topic budget, retrieval settings, prompt hash, planner implementation hash
 and LLM-client implementation hash. Follow-up keys additionally include the
-parent payload hash and exact feedback. Changing these inputs produces a new
-entry. Cached identities and payloads are checked on read; corruption raises
-an error. A per-key POSIX file lock and atomic write prevent concurrent misses
+parent payload hash and exact feedback. Rewording changes the request key, but
+verified paraphrase aliases can share one saved initial plan. Changed model,
+prompt, policy or tracked implementation versions require a compatible new
+plan. Cached identities and payloads are checked on read; corruption raises
+an error. POSIX file locks and atomic writes prevent concurrent identical misses
 from publishing different plans. New files have owner-only permissions.
+
+### Verified paraphrase reuse
+
+The versioned planner accepts verified paraphrases of initial requests. There
+is one cache behavior, with no exact-input-only mode. Repeating a saved wording
+needs no model call. For new wording, the planner considers up to three
+compatible saved plans from the 128 most recently modified cache records.
+Model/settings, planning budgets, prompts and relevant implementation/policy
+hashes must match. Conservative checks reject changed numbers, quantities,
+laterality, sex, explicit stage markers, negation or uncertainty before model
+verification; these checks can reject some valid paraphrases too.
+
+Lexical similarity only ranks candidate plans. A separate structured LLM call
+must affirm that patient facts, uncertainty and information needs are unchanged
+in both directions. It must map every original and current context unit and
+re-anchor every saved requirement to exact current-source quotes. The application
+retains the saved search concepts and topic groupings, copies only current
+verbatim context into the rebuilt searches, and revalidates the resulting plan.
+Uncertain, invalid or failed verification falls back to normal fresh planning.
+An LLM equivalence decision is not proof of clinical equivalence; matching
+facts or requested needs incorrectly remains a risk requiring evaluation.
+
+The first accepted paraphrase has `cache_status=paraphrase_hit` and uses one
+verification call instead of generating a new search plan. Its verified wording
+is saved as an alias inside the original record, not another full plan file.
+Repeating that wording gives `paraphrase_alias_hit` without any LLM call.
+At most 16 aliases are retained per plan (`paraphrase_cache_aliases`); old
+aliases are evicted in insertion order. New patient cases still create new
+records; global expiration/disk-size eviction is not implemented here.
+Request locks use 256 shared slots to avoid a new lock file per wording.
+Alias updates are locked and atomic, and alias identities, verification data
+and adapted-payload hashes are checked on reuse. Concurrent requests for the
+same wording perform one verification.
+
+`TaskPlan.planning` records `cache_source_key`, `paraphrase_check_calls`,
+`paraphrase_verification` and a miss reason. `llm_calls` includes equivalence
+checks as well as plan-generation attempts. Exact cache keys still include
+the exact current input; aliases link verified variants to the saved plan.
+Follow-up plans/feedback continue to use exact matching, preserving their
+parent-specific behavior. The legacy planner does not use this mechanism.
+
+This reuses the search structure, not passages or answers. Verbatim patient
+context can differ after rewording, so identical retrieved passages across
+paraphrases are not guaranteed. Full current input remains available to the
+writer. Validate paraphrases and clinical near misses before production use.
+
+### Cache provenance and fallbacks
 
 The v2 schema/version and changed implementation invalidate earlier v1 plan
 keys automatically. Old files can remain local but are not used by v2 runs.

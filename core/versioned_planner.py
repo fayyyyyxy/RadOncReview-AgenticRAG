@@ -215,6 +215,8 @@ class VersionedPlanner:
         self.folder = Path(config.features.plan_cache_path)
         if not 1 <= config.features.max_planning_topics <= 8 or not 1 <= config.features.max_followup_topics <= 4:
             raise ValueError("Planning budgets must be 1–8 initial topics and 1–4 follow-up topics")
+        if not 1 <= config.features.paraphrase_cache_candidates <= 8 or not 1 <= config.features.paraphrase_cache_aliases <= 64:
+            raise ValueError("Paraphrase cache allows 1–8 candidates and 1–64 aliases per plan")
 
     def plan(self, analysis, parent=None, feedback=None):
         followup = parent is not None
@@ -234,10 +236,21 @@ class VersionedPlanner:
                     "retriever": asdict(self.config.retriever), "max_topics": budget,
                     "phase": "followup" if followup else "initial", "feedback": feedback,
                     "parent_plan_sha256": parent.planning["payload_sha256"] if followup else None}
+        from .plan_paraphrases import POLICY_VERSION, SYSTEM as PARAPHRASE_SYSTEM, PROMPT as PARAPHRASE_PROMPT
+        identity['paraphrase_policy'] = {
+            'version': POLICY_VERSION,
+            'code_sha256': hashlib.sha256(Path(__file__).with_name('plan_paraphrases.py').read_bytes()).hexdigest(),
+            'prompt_sha256': digest([PARAPHRASE_SYSTEM, PARAPHRASE_PROMPT]),
+            'analysis_code_sha256': hashlib.sha256(Path(__file__).with_name('query_analyzer.py').read_bytes()).hexdigest(),
+            'max_candidates': self.config.features.paraphrase_cache_candidates,
+            'max_aliases': self.config.features.paraphrase_cache_aliases,
+        }
         key = digest(identity)
         path = self.folder / f"{key}.json"
-        calls, error = 0, None
-        with cache_lock(self.folder, key):
+        calls, error, reuse, attempts = 0, None, None, []
+        # Bound lock-file growth for arbitrarily many paraphrased requests.
+        lock_key = 'requests-' + key[:2]
+        with cache_lock(self.folder, lock_key):
             if path.exists():
                 record = json.loads(path.read_text())
                 if record.get("cache_key") != key or digest(record.get("identity")) != key:
@@ -247,46 +260,54 @@ class VersionedPlanner:
                     raise ValueError("Cached planning payload is corrupted")
                 status = "hit"
             else:
-                data = {"original_patient_input": analysis.original_query, "sources": sources,
-                        "context_units": units, "max_topics": budget,
-                        "phase": "followup" if followup else "initial",
-                        "existing_plan": parent.planning.get("payload") if followup else None}
-                prompt = PROMPT + "\nDATA:\n" + json.dumps(data, ensure_ascii=False)
-                attempts = []
-                for attempt in range(2):
-                    calls += 1
-                    result = None
-                    try:
-                        result = self.llm.generate_structured(prompt, output_schema={"requirements": "array", "topics": "array", "reasoning": "string"}, system_prompt=SYSTEM)
-                        payload = validate_payload(result, sources, budget, followup)
-                        attempts.append({"prompt": prompt, "result": result, "validation": "accepted"})
-                        error = None
-                        break
-                    except Exception as exc:
-                        error = f"{type(exc).__name__}: {exc}"
-                        attempts.append({"prompt": prompt, "result": result, "validation_error": error})
-                        prompt += "\nValidation failed: " + error + ". Return a complete corrected JSON plan with anchored needs, search_terms and supplied context_ids."
-                if error:
-                    # Explicit non-cached fallback: never pretend a failed LLM plan was validated.
-                    if followup:
-                        payload = {"requirements": [], "topics": [], "reasoning": "Follow-up validation failed; no additional searches scheduled."}
-                    else:
-                        payload = {"requirements": [{"id": "R1", "kind": "explicit", "need": "Full-input fallback",
-                                   "anchors": [{"source": "question", "quote": sources["question"]}], "inference_reason": ""}],
-                                   "topics": [{"requirement_ids": ["R1"], "search_terms": [], "context_ids": []}],
-                                   "reasoning": "Planning validation failed; search the complete original input."}
-                    status = "fallback_not_cached"
+                if not followup:
+                    from .plan_paraphrases import find_reusable_plan
+                    reuse = find_reusable_plan(self.folder, identity, sources, budget, self.llm,
+                                               max_candidates=self.config.features.paraphrase_cache_candidates,
+                                               max_aliases=self.config.features.paraphrase_cache_aliases)
+                    calls += reuse.get('calls', 0) if reuse else 0
+                if reuse and 'payload' in reuse:
+                    payload, status = reuse['payload'], reuse['status']
                 else:
-                    record = {"cache_key": key, "identity": identity, "payload": payload, "payload_sha256": digest(payload),
-                              "created_at": datetime.now(timezone.utc).isoformat(), "system_prompt": SYSTEM, "attempts": attempts}
-                    tmp = self.folder / f".{key}.{uuid.uuid4().hex}.tmp"
-                    try:
-                        with os.fdopen(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as handle:
-                            json.dump(record, handle, ensure_ascii=False, indent=2, default=lambda x: x.value if isinstance(x, Enum) else str(x))
-                        os.replace(tmp, path)
-                    finally:
-                        tmp.unlink(missing_ok=True)
-                    status = "created"
+                    data = {"original_patient_input": analysis.original_query, "sources": sources,
+                            "context_units": units, "max_topics": budget,
+                            "phase": "followup" if followup else "initial",
+                            "existing_plan": parent.planning.get("payload") if followup else None}
+                    prompt = PROMPT + "\nDATA:\n" + json.dumps(data, ensure_ascii=False)
+                    for attempt in range(2):
+                        calls += 1
+                        result = None
+                        try:
+                            result = self.llm.generate_structured(prompt, output_schema={"requirements": "array", "topics": "array", "reasoning": "string"}, system_prompt=SYSTEM)
+                            payload = validate_payload(result, sources, budget, followup)
+                            attempts.append({"prompt": prompt, "result": result, "validation": "accepted"})
+                            error = None
+                            break
+                        except Exception as exc:
+                            error = f"{type(exc).__name__}: {exc}"
+                            attempts.append({"prompt": prompt, "result": result, "validation_error": error})
+                            prompt += "\nValidation failed: " + error + ". Return a complete corrected JSON plan with anchored needs, search_terms and supplied context_ids."
+                    if error:
+                        # Explicit non-cached fallback: never pretend a failed LLM plan was validated.
+                        if followup:
+                            payload = {"requirements": [], "topics": [], "reasoning": "Follow-up validation failed; no additional searches scheduled."}
+                        else:
+                            payload = {"requirements": [{"id": "R1", "kind": "explicit", "need": "Full-input fallback",
+                                       "anchors": [{"source": "question", "quote": sources["question"]}], "inference_reason": ""}],
+                                       "topics": [{"requirement_ids": ["R1"], "search_terms": [], "context_ids": []}],
+                                       "reasoning": "Planning validation failed; search the complete original input."}
+                        status = "fallback_not_cached"
+                    else:
+                        record = {"cache_key": key, "identity": identity, "payload": payload, "payload_sha256": digest(payload),
+                                  "created_at": datetime.now(timezone.utc).isoformat(), "system_prompt": SYSTEM, "attempts": attempts}
+                        tmp = self.folder / f".{key}.{uuid.uuid4().hex}.tmp"
+                        try:
+                            with os.fdopen(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as handle:
+                                json.dump(record, handle, ensure_ascii=False, indent=2, default=lambda x: x.value if isinstance(x, Enum) else str(x))
+                            os.replace(tmp, path)
+                        finally:
+                            tmp.unlink(missing_ok=True)
+                        status = "created"
         requirements = {r["id"]: r for r in payload["requirements"]}
         tasks, skipped = [], []
         old_queries = {t.query for t in parent.sub_tasks} if followup else set()
@@ -315,6 +336,10 @@ class VersionedPlanner:
                     "failed_attempts": attempts if error else [],
                     "parent_cache_key": parent.planning["cache_key"] if followup else None,
                     "feedback": feedback}
+        metadata['paraphrase_check_calls'] = reuse.get('calls', 0) if reuse else 0
+        metadata['cache_source_key'] = reuse.get('source_key', key) if reuse else key
+        metadata['paraphrase_verification'] = reuse.get('verification') if reuse else None
+        metadata['paraphrase_miss_reason'] = reuse.get('miss_reason') if reuse else None
         print(f"Versioned planner: {identity['phase']} cache={status} key={key[:12]} topics={len(tasks)//2} llm_calls={calls}")
         planned_analysis = replace(analysis, is_complex=True) if not followup and len(payload["topics"]) > 1 else analysis
         return TaskPlan(plan_id=f"plan_{uuid.uuid4().hex[:8]}", original_query=analysis.original_query,

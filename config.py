@@ -120,6 +120,8 @@ class FeatureConfig:
     plan_cache_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/search_plans")
     max_planning_topics: int = 6
     max_followup_topics: int = 3
+    paraphrase_cache_candidates: int = 3
+    paraphrase_cache_aliases: int = 16  # bounded verified wordings per saved initial plan
 
 
 @dataclass
