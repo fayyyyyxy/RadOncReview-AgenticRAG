@@ -86,6 +86,9 @@ class TaskPlanner:
 
     def plan(self, analysis: QueryAnalysis) -> TaskPlan:
         """Create an execution plan based on query analysis."""
+        if self.config.features.versioned_planning:
+            from .versioned_planner import VersionedPlanner
+            return VersionedPlanner(self.llm, self.config).plan(analysis)
         # Complex/comparison queries use LLM to decompose into subtopics
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
             return self._plan_with_llm(analysis)
@@ -200,6 +203,9 @@ Remember: Generate the optimal number of tasks (2-3) that comprehensively cover 
 
     def replan(self, plan: TaskPlan, feedback: str) -> TaskPlan:
         """Adjust the plan based on self-critique feedback."""
+        if self.config.features.versioned_planning:
+            from .versioned_planner import VersionedPlanner
+            return VersionedPlanner(self.llm, self.config).plan(plan.analysis, parent=plan, feedback=feedback)
         system_prompt = """You are a radiation oncology query planner.
 Adjust the search plan based on the feedback received."""
 

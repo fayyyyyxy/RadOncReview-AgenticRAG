@@ -124,6 +124,8 @@ def main(argv=None):
     parser.add_argument("--no-trial-papers", action="store_true", help="Search review notes only, not the trial-paper Knowledge Base.")
     parser.add_argument("--no-citation-check", action="store_true", help="Skip the citation check, as runs made before it did.")
     parser.add_argument("--institutional-examples", action="store_true", help="Include up to two institutional examples in synthesis.")
+    parser.add_argument("--versioned-planning", action="store_true", help="Generate flexible source-anchored LLM plans and reuse validated plans.")
+    parser.add_argument("--plan-cache", type=Path, help="Local folder for validated search plans, never passages.")
     parser.add_argument("--past-case-index", type=Path, help="Existing local past-case index folder (does not build it).")
     args = parser.parse_args(argv)
     try:
@@ -144,6 +146,7 @@ def main(argv=None):
                 "mode": "dry_run", "aws_calls": 0, "model": args.model, "site_filter": args.site_filter,
                 "trial_papers": not args.no_trial_papers, "citation_check": not args.no_citation_check,
                 "institutional_examples": args.institutional_examples,
+                "versioned_planning": args.versioned_planning,
                 "example_index_validation": "not_performed_in_dry_run" if args.institutional_examples else "not_requested",
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
@@ -162,6 +165,9 @@ def main(argv=None):
         config.features.site_filter = args.site_filter
         config.features.citation_check = not args.no_citation_check
         config.features.institutional_examples = args.institutional_examples
+        config.features.versioned_planning = args.versioned_planning
+        if args.plan_cache is not None:
+            config.features.plan_cache_path = str(args.plan_cache.resolve())
         if args.past_case_index is not None:
             config.features.past_case_index_path = str(args.past_case_index.resolve())
         case_contexts = {}

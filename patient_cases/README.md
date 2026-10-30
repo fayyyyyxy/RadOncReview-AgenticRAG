@@ -227,6 +227,160 @@ clinical_question, case_id and patient_id. Provide an expected development
 export SHA-256 through `config.features.past_case_source_sha256` when a
 workbook corpus is known; the baseline runner does this automatically.
 
+## Flexible versioned LLM planning (opt-in)
+
+`--versioned-planning` lets the LLM extract arbitrary requested information
+needs, rather than matching the earlier fixed topic vocabulary. Each need
+must quote the question exactly; follow-up needs may also quote explicit
+critique feedback. The application constructs focused queries from these
+quotes plus the complete original patient input, and searches both existing
+clinical backends. The prompt asks the model to apply generic citation requests
+to every topic rather than create a separate citation-only topic. That semantic
+instruction is not mechanically guaranteed; inspect the saved requirements.
+
+Initial plans allow up to six topics by default, and follow-ups up to three
+(`config.features.max_planning_topics` / `max_followup_topics`). When the
+declared needs fit the budget, the application schedules one topic per need
+so the model cannot collapse them back into one broad search. Above the
+budget, it keeps the model's validated grouping without dropping needs.
+An oversized topic list is rejected, never silently truncated. Source quotes
+bundling a list (two or more commas/semicolons) are rejected for a more granular
+extraction; this is a structural heuristic, not semantic understanding.
+Every declared need must map to exactly one topic. This
+validates structure, source anchoring and **declared** coverage, not whether
+the LLM identified every semantic requirement or made a medically correct
+plan. Source anchoring does not solve the condition-routing problems found
+in the earlier relevance audit.
+
+```bash
+# Validate inputs without AWS/model calls.
+python patient_cases/run_baseline.py --versioned-planning
+
+# Paid LLM planning plus three fresh AWS retrieval passes; no answer writing.
+python patient_cases/check_retrieval_consistency.py --case-id BR-003 --mode versioned --repeats 3 --execute
+
+# Later answer generation, including the normal critique/rewrite flow.
+python patient_cases/run_baseline.py --versioned-planning --execute --limit 1 --name versioned-pilot
+```
+
+The first valid plan is saved locally; repeated requests reuse it and create
+fresh pending search tasks. They do not reuse passage results. By default,
+plan records and locks live in ignored `patient_cases/data/processed/search_plans/`.
+Both runners accept `--plan-cache path/to/folder` for an isolated experiment.
+Plans contain clinical input and feedback: keep them local and ignored.
+
+Cache keys include exact patient input, analysis, model/sampling settings,
+topic budget, retrieval settings, prompt hash, planner implementation hash
+and LLM-client implementation hash. Follow-up keys additionally include the
+parent payload hash and exact feedback. Changing these inputs produces a new
+entry. Cached identities and payloads are checked on read; corruption raises
+an error. A per-key POSIX file lock and atomic write prevent concurrent misses
+from publishing different plans. New files have owner-only permissions.
+
+Cache records preserve source-anchored requirements, topic mappings, rationale,
+generation timestamp, model settings, system prompt and planning attempts.
+`TaskPlan.planning` records cache status, hashes, call count and validation
+scope; `AgentResponse.routing.planning_events` preserves both initial and
+follow-up events. A failed initial generation gets one validation-repair
+attempt, then an explicit **uncached full-input fallback**. Failed follow-up
+planning schedules no additional searches and records its failure; existing
+evidence and writer feedback remain available. A rewrite-only critique can
+also explicitly request no additional search. Exact duplicate follow-up
+queries are skipped. The consistency check does not count a planning fallback
+as a healthy validated-plan run.
+
+The original planner remains the default; versioned planning is opt-in.
+Versioned planning uses rule-based initial
+analysis so an uncached generative analysis step cannot change the plan key
+on every request. Multiple initial topics use the existing per-topic
+retrieval/reranking path, retaining its three final passages per topic.
+
+Plan reuse establishes repeatability of the recorded plan; it does not show
+that independent LLM generations are deterministic. Different feedback may
+legitimately create different follow-up searches. Live source changes can
+also change returned passages. The earlier local 14-case audit evaluated a
+discarded vocabulary-based prototype that is not included in this branch.
+It is not evidence of the versioned planner's relevance or clinical accuracy.
+
+## Retrieval repeatability and relevance checks
+
+Clinical evidence is retrieved by `core/retriever.py` in both the examples-off
+and examples-on paths. Hospital examples use `core/past_cases.py`, connected to
+the writer through `core/institutional_examples.py` after evidence retrieval.
+
+The original complex-question planner uses a generative model to rewrite
+search topics. Even with temperature zero, repeated requests can produce
+different queries and retrieve different passages. The versioned planner
+described above reuses validated search plans and can create new follow-up
+plans for explicit critique gaps. The retrieval checker defaults to versioned
+planning; use `--mode llm` to measure the original planner instead.
+
+Passage identity now includes the complete text hash, preventing distinct
+trial passages sharing the first 100 characters from being merged. Reranking
+uses a canonical candidate order and a stable tie-breaker. These identity
+and ordering fixes apply in both planning modes.
+
+Check fresh retrieval without writing or judging an answer:
+
+```bash
+# Validate a Development input without AWS calls.
+python patient_cases/check_retrieval_consistency.py --case-id BR-003
+
+# Paid planning on a cache miss plus repeated live AWS retrieval; no generated answers.
+python patient_cases/check_retrieval_consistency.py --case-id BR-003 --mode versioned --repeats 3 --execute
+
+# The original generative planner can be measured separately.
+python patient_cases/check_retrieval_consistency.py --case-id BR-003 --mode llm --execute
+
+# Interleave repeats across a supplied, workbook-validated Development cohort.
+python patient_cases/check_retrieval_consistency.py --inputs path/to/inputs.jsonl --all-inputs --repeats 3 --execute
+
+# Separately evaluate the existing disease-site restriction on the same cohort.
+python patient_cases/check_retrieval_consistency.py --inputs path/to/inputs.jsonl --all-inputs --repeats 2 --site-filter --execute
+```
+
+The check records semantic query plans, raw candidate pools, ordered final
+passage identities, logs, configuration, input and code hashes. It requires
+nonempty completed active tasks, a loaded reranker, and no logged retrieval/reranking
+errors before reporting a healthy comparison. A run passes only if all three
+hashes match across repetitions. Reports contain clinical text and are kept
+in ignored local `patient_cases/outputs/` folders.
+
+Every repetition searches both clinical backends again; saved passages are
+never replayed. The FAISS index loads once per process, as in the application.
+The live DynamoDB and Knowledge Base contents are not frozen or version-pinned,
+so source updates may legitimately change results. Matching results establish
+repeatability for the measured case and session, not medical relevance or
+accuracy. Review multiple Development cases before enabling this mode by
+default or using it for an examples-off/on comparison. To use it in a later
+answer-generation run, add `--versioned-planning` to `run_baseline.py`; keep that
+setting the same in both arms.
+
+For a completed retrieval run, build a local review packet or request a paid
+automated relevance screen:
+
+```bash
+python patient_cases/review_retrieval_relevance.py patient_cases/outputs/retrieval-consistency-<run>
+python patient_cases/review_retrieval_relevance.py patient_cases/outputs/retrieval-consistency-<run> --execute
+```
+
+The packet contains each patient question and the union of selected passages
+across repetitions, with appearance/rank information. The optional Bedrock
+screen labels each passage direct, partial or irrelevant and assesses requested
+aspect coverage. It must provide a source-matching quote for direct/partial
+labels; missing passages, unknown IDs and invented supporting quotes reject
+the response. One formatting/validation repair is allowed, with both requests
+and responses saved. Successful screens can be resumed without repeating
+their model calls; changed run data, rubric or settings cannot be mixed.
+
+This is automated question/passage alignment, not medical correctness or an
+independent gold standard: the screen uses the project's Llama writer model.
+Coverage labels also need human review. No attending plans, hospital examples
+or locked-test cases are used. The review page, prompts and scores remain in
+ignored local output folders. A different source category alone does not prove
+irrelevance; general methods may transfer, while even a matching disease site
+can have an unsuitable population or treatment setting.
+
 ## Past-case index
 
 Development cases eligible as worked examples form a local index of earlier

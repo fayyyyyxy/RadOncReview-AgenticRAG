@@ -75,6 +75,9 @@ class TaskPlan:
     reasoning: str = ""  # Explanation of the plan
     created_at: datetime = field(default_factory=datetime.now)
 
+    # Local planning provenance, source-anchored requirements and cache events.
+    planning: Dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass
 class RetrievedChunk:

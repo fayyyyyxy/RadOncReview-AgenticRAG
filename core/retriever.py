@@ -13,6 +13,7 @@ from sentence_transformers import CrossEncoder
 
 from .models import RetrievedChunk, SubTask, RetrievalStrategy, TaskStatus
 from .site_routing import EvidenceScope
+from .retrieval_identity import passage_identity
 from config import RetrieverConfig, EmbeddingConfig, AWSConfig, create_boto3_session
 
 
@@ -42,8 +43,12 @@ class CrossEncoderReranker:
         """Rerank chunks using cross-encoder."""
         self._load_model()
 
+        # Canonical batches prevent incoming API result order from controlling equal-score
+        # results or changing which passages share an inference batch.
+        chunks = sorted(chunks, key=passage_identity)
+
         if self._model is None or not chunks:
-            return chunks[:top_k]
+            return sorted(chunks, key=lambda c: (-c.similarity_score, passage_identity(c)))[:top_k]
 
         try:
             # Create query-document pairs
@@ -54,7 +59,7 @@ class CrossEncoderReranker:
 
             # Combine chunks with scores and sort
             scored_chunks = list(zip(chunks, scores))
-            scored_chunks.sort(key=lambda x: x[1], reverse=True)
+            scored_chunks.sort(key=lambda x: (-float(x[1]), passage_identity(x[0])))
 
             # Update relevance scores and return top_k
             results = []
@@ -65,7 +70,7 @@ class CrossEncoderReranker:
             return results
         except Exception as e:
             print(f"Cross-encoder reranking failed: {e}")
-            return chunks[:top_k]
+            return sorted(chunks, key=lambda c: (-c.similarity_score, passage_identity(c)))[:top_k]
 
 
 class RetrieverManager:
@@ -340,7 +345,7 @@ class RetrieverManager:
             ))
 
         # Sort by similarity score
-        results.sort(key=lambda x: x.similarity_score, reverse=True)
+        results.sort(key=lambda x: (-x.similarity_score, passage_identity(x)))
         return results
 
     def sparse_search(self, query: str, top_k: Optional[int] = None) -> List[RetrievedChunk]:
@@ -475,7 +480,7 @@ class RetrieverManager:
         medical_terms = re.findall(r'\b[A-Z]{2,}\b', query)  # Acronyms like SBRT, IMRT
         keywords.extend([t.lower() for t in medical_terms])
 
-        return list(set(keywords))
+        return sorted(set(keywords))
 
     def execute_task(self, task: SubTask, scope: Optional[EvidenceScope] = None) -> SubTask:
         """Execute a retrieval task and update its status; scope limits evidence to one disease site."""

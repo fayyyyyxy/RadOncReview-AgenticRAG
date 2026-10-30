@@ -132,7 +132,7 @@ class QueryAnalyzer:
         anatomy_pattern = r'\b(lymph\s+node|chest\s+wall|supraclavicular|axilla|internal\s+mammary|mediastin)\b'
         entities.extend(re.findall(anatomy_pattern, text, re.IGNORECASE))
 
-        return list(set(entities))
+        return sorted(set(entities))
 
     def _detect_complexity(self, text: str, intent: QueryIntent) -> bool:
         """Determine if the query requires multi-step reasoning."""
@@ -216,6 +216,8 @@ class QueryAnalyzer:
         """Use LLM for more sophisticated query analysis."""
         # First do rule-based analysis
         rule_based = self.analyze(query)
+        if self.config.features.versioned_planning:
+            return rule_based
 
         # Use LLM to enhance understanding
         system_prompt = """You are a radiation oncology clinical query analyzer.

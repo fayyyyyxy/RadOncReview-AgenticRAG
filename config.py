@@ -116,6 +116,10 @@ class FeatureConfig:
     institutional_examples: bool = False
     past_case_index_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/past_case_index")
     past_case_source_sha256: Optional[str] = None
+    versioned_planning: bool = False  # flexible LLM plans, validated and reused; not passage caching
+    plan_cache_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/search_plans")
+    max_planning_topics: int = 6
+    max_followup_topics: int = 3
 
 
 @dataclass

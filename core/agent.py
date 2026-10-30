@@ -22,6 +22,7 @@ from .guardrails import GuardrailManager
 from .case_labels import CaseLabels
 from .site_routing import EvidenceScope, scope_for, table_fingerprint
 from .institutional_examples import CaseContext, LocalInstitutionalExamples
+from .retrieval_identity import passage_identity
 
 
 class AgenticRAGEngine:
@@ -257,10 +258,8 @@ class AgenticRAGEngine:
 
     @staticmethod
     def _chunk_key(chunk: Dict) -> Any:
-        """One identity per passage; trial-paper chunks have no FAISS id, so their file and opening text stand in."""
-        if chunk.get("source_type", "review_notes") == "clinical_trial":
-            return f"{chunk.get('s3_location', '')}_{chunk.get('text', '')[:100]}"
-        return chunk.get("faiss_id")
+        """Use the entire text to distinguish trial passages sharing the same opening."""
+        return passage_identity(chunk)
 
     def _merge_chunks(self, first: List[Dict], added: List[Dict]) -> List[Dict]:
         """The first round's passages in their order, then the added ones they do not already include."""
@@ -345,7 +344,7 @@ class AgenticRAGEngine:
         # Use LLM-enhanced analysis for complex queries, rule-based for simple one
         analysis = self.query_analyzer.analyze(processed_query)
 
-        if analysis.is_complex or analysis.confidence < 0.7:
+        if (analysis.is_complex or analysis.confidence < 0.7) and not self.config.features.versioned_planning:
             self._log_reasoning("ANALYZE", "Using LLM for deeper analysis")
             analysis = self.query_analyzer.analyze_with_llm(processed_query)
 
@@ -359,6 +358,8 @@ class AgenticRAGEngine:
         # ========== Step 3: Task Planning ==========
         self._log_reasoning("PLAN", "Creating execution plan")
         plan = self.task_planner.plan(analysis)
+        analysis = plan.analysis
+        planning_events = [dict(plan.planning)] if plan.planning else []
 
         self._log_reasoning("PLAN",
             f"Created {len(plan.sub_tasks)} sub-tasks: {plan.reasoning}"
@@ -453,6 +454,8 @@ class AgenticRAGEngine:
 
                 # Replan with feedback
                 improved_plan = self.task_planner.replan(plan, guidance)
+                if improved_plan.planning:
+                    planning_events.append(dict(improved_plan.planning))
 
                 # Re-execute new tasks
                 for task in improved_plan.sub_tasks:
@@ -537,6 +540,8 @@ class AgenticRAGEngine:
             synthesis_requests=list(self.synthesizer.requests),
             routing={
                 "labels": vars(labels),
+                "planning_mode": "source_anchored_llm_v1" if self.config.features.versioned_planning else "llm",
+                "planning_events": planning_events,
                 "site_filter": self.config.features.site_filter,
                 "review_note_categories": sorted(scope.review_note_categories)
                 if scope.review_note_categories is not None else None,
