@@ -136,6 +136,9 @@ class AgentResponse:
     context_passages: List[Dict[str, Any]] = field(default_factory=list)
     # Case labels and the evidence scope they produced; also outside metadata, for the same reason
     routing: Dict[str, Any] = field(default_factory=dict)
+    # Examples and exact writer requests are separate from citable evidence and the API payload.
+    institutional_examples: Dict[str, Any] = field(default_factory=dict)
+    synthesis_requests: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass

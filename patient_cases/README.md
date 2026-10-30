@@ -99,7 +99,8 @@ python patient_cases/run_baseline.py --execute --limit 1
 
 This downloads the reranker model if needed, reads existing AWS evidence,
 creates query embeddings, and makes paid LLM calls in the configured account.
-It does not retrieve institutional examples or change the existing RAG code.
+It uses evidence only by default. `--institutional-examples` additionally supplies
+up to two historical institutional examples to the writer, as described below.
 The separate LLM judge is off by default; self-critique remains enabled as
 configured by the existing engine. Add --judge only if its extra model calls
 and calibration requirements are intended. Temperature is set to zero; this
@@ -169,6 +170,62 @@ case and other encounters belonging to the same patient. Patient ID is for
 this grouping check, not a clinical similarity feature or model input. Other
 metadata also needs review before model use: for example, Technique may
 describe the delivered treatment rather than information known at decision time.
+
+## Institutional examples in generated answers
+
+The local `codex/institutional-examples` implementation builds on
+`grounded-citations` (base commit `1994a8c`). It preserves that branch's
+citation checker, model settings, and self-critique/rewrite behavior. The new
+feature is off by default and is available through the development baseline
+runner and the Python engine; the web/API request schema is unchanged.
+
+Use the existing index format described below. Generated `.npy`, `.jsonl`
+and manifest files are ignored by Git; fetching a branch does not copy them.
+An existing index can be supplied with `--past-case-index /path/to/past_case_index`.
+Its parent folder must contain its original `development_examples.jsonl`.
+
+```bash
+# No AWS calls; validates the development inputs, not the index files.
+python patient_cases/run_baseline.py --institutional-examples
+python patient_cases/verify_institutional_examples.py
+
+# Paid answer-generation calls, after AWS login and index preparation.
+python patient_cases/run_baseline.py --execute --limit 1 --name examples-off
+python patient_cases/run_baseline.py --execute --limit 1 --name examples-on --institutional-examples
+```
+
+Both runs use the same default input case. Use new names for deliberate
+repeats. Keep writer model, evidence settings and evaluation cohort fixed for
+comparisons; the live evidence sources are still not a frozen snapshot.
+
+The adapter rejects an index with a different embedding model/dimension,
+changed payloads or manifest, a stale development export, or a corpus that
+differs from the current workbook's development cases. Only eligible
+Development records are permitted. The exact query case and all encounters
+of its patient are excluded. The existing matching tiers and 0.50 similarity
+floor select at most two examples. A known development query reuses its
+stored vector; an unindexed query needs an embedding.
+
+Selected examples are labelled historical practice, are not numbered as
+evidence, and cannot enter the citation-passage list. The writer is instructed
+to support medical recommendations with numbered clinical evidence and to
+request missing patient information rather than copy it from an example.
+When enabled, an empty evidence retrieval cannot be replaced by examples.
+These instructions are constraints on the prompt, not proof of clinical accuracy.
+
+Each saved response now records `institutional_examples` (index provenance,
+selected case IDs, similarities and payloads) and `synthesis_requests` (exact
+writer prompts, including rewrites). Patient IDs and the query case's own
+attending plan are not supplied to the writer. These local outputs contain
+clinical text. Eason's citation checker still receives clinical passages only;
+the judge's evidence context also remains separate from examples.
+
+For direct Python use, set `config.features.institutional_examples=True` and
+call `engine.query(context.query(), labels, case_context=context)`, where
+`context` is `core.institutional_examples.CaseContext` with vignette,
+clinical_question, case_id and patient_id. Provide an expected development
+export SHA-256 through `config.features.past_case_source_sha256` when a
+workbook corpus is known; the baseline runner does this automatically.
 
 ## Past-case index
 

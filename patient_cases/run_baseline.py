@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 sys.path.insert(0, str(REPO))
 
-from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, read_records, validate_records
+from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, read_records, validate_records, development_examples
 from config import LLMConfig
 from core.case_labels import SETTING_GROUPS, CaseLabels
 
@@ -81,7 +81,7 @@ def json_value(value):
     raise TypeError(f"Unsupported output type: {type(value).__name__}")
 
 
-def run_case(engine, item, max_length, labels=None):
+def run_case(engine, item, max_length, labels=None, case_context=None):
     """Save blocked/error cases explicitly; never truncate clinical input."""
     query = make_query(item)
     labels = labels or CaseLabels()
@@ -93,7 +93,7 @@ def run_case(engine, item, max_length, labels=None):
     try:
         engine.reset_conversation()
         with redirect_stdout(log), redirect_stderr(log):
-            response = engine.query(query, labels)
+            response = engine.query(query, labels, case_context=case_context) if case_context else engine.query(query, labels)
         retrieval = response.metadata.get("retrieval", {})
         status = "response_generated"
         if not retrieval:
@@ -123,6 +123,8 @@ def main(argv=None):
     parser.add_argument("--site-filter", action="store_true", help="Limit evidence to each case's disease site.")
     parser.add_argument("--no-trial-papers", action="store_true", help="Search review notes only, not the trial-paper Knowledge Base.")
     parser.add_argument("--no-citation-check", action="store_true", help="Skip the citation check, as runs made before it did.")
+    parser.add_argument("--institutional-examples", action="store_true", help="Include up to two institutional examples in synthesis.")
+    parser.add_argument("--past-case-index", type=Path, help="Existing local past-case index folder (does not build it).")
     args = parser.parse_args(argv)
     try:
         if args.name is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", args.name):
@@ -141,6 +143,8 @@ def main(argv=None):
             print(json.dumps({
                 "mode": "dry_run", "aws_calls": 0, "model": args.model, "site_filter": args.site_filter,
                 "trial_papers": not args.no_trial_papers, "citation_check": not args.no_citation_check,
+                "institutional_examples": args.institutional_examples,
+                "example_index_validation": "not_performed_in_dry_run" if args.institutional_examples else "not_requested",
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
                 "selected": [{"case_id": r["case_id"], "query_characters": len(make_query(r))} for r in selected],
@@ -157,6 +161,21 @@ def main(argv=None):
         config.llm.model_id = args.model
         config.features.site_filter = args.site_filter
         config.features.citation_check = not args.no_citation_check
+        config.features.institutional_examples = args.institutional_examples
+        if args.past_case_index is not None:
+            config.features.past_case_index_path = str(args.past_case_index.resolve())
+        case_contexts = {}
+        if args.institutional_examples:
+            from core.institutional_examples import CaseContext
+            workbook_records = read_records(args.workbook)
+            records = {r["Case ID"]: r for r in workbook_records}
+            source = "".join(json.dumps(example, ensure_ascii=False) + "\n"
+                             for example in development_examples(workbook_records))
+            config.features.past_case_source_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+            case_contexts = {item["case_id"]: CaseContext(
+                vignette=item["vignette"], clinical_question=item["clinical_question"],
+                case_id=item["case_id"], patient_id=records[item["case_id"]]["Patient ID"],
+            ) for item in selected}
         # The planner still makes a trial-paper task per topic; with the Knowledge Base off it returns nothing
         config.aws.knowledge_base_enabled = not args.no_trial_papers
         # Log all settings, including the opt-in judge difference from the web app.
@@ -166,13 +185,13 @@ def main(argv=None):
         output = named or ROOT / "outputs" / ("baseline_" + run_id)
         output.mkdir(parents=True, exist_ok=False)
         manifest = {
-            "run_id": run_id, "mode": "existing_evidence_only_rag",
+            "run_id": run_id, "mode": "evidence_with_institutional_examples" if args.institutional_examples else "existing_evidence_only_rag",
             "git_commit": revision.stdout.strip(), "working_tree_dirty": bool(changes.stdout.strip()),
             "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "input_sha256": hashlib.sha256(args.inputs.read_bytes()).hexdigest(),
             "workbook_sha256": hashlib.sha256(args.workbook.read_bytes()).hexdigest(),
             "case_ids": [r["case_id"] for r in selected], "judge_enabled": args.judge,
-            "patient_example_retrieval": False, "config": asdict(config),
+            "patient_example_retrieval": args.institutional_examples, "config": asdict(config),
             "evidence_snapshot": "Existing live AWS resources; not frozen or clinically validated",
         }
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -181,8 +200,12 @@ def main(argv=None):
             # Store startup warnings, including any reranker model download failure.
             with (output / "startup.log").open("w", encoding="utf-8") as log, redirect_stdout(log), redirect_stderr(log):
                 engine = AgenticRAGEngine(config=config, enable_judge=args.judge)
+            if args.institutional_examples:
+                manifest["institutional_example_index"] = engine.example_provider.provenance()
+                (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             for item in selected:
-                result = run_case(engine, item, config.guardrail.max_input_length, labels[item["case_id"]])
+                result = run_case(engine, item, config.guardrail.max_input_length, labels[item["case_id"]],
+                                  case_contexts.get(item["case_id"]))
                 with (output / "results.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(result, ensure_ascii=False, default=json_value) + "\n")
                 statuses.append(result["status"])

@@ -2,6 +2,7 @@
 Response Synthesizer: Generates answers from retrieved chunks with citations.
 """
 from typing import List, Dict, Optional
+import json
 
 from .models import (
     RetrievedChunk, Citation, AgentResponse, TaskPlan,
@@ -33,6 +34,30 @@ Guidelines for your responses:
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
+        self.requests = []
+
+    def _generate(self, prompt: str, examples: Optional[List[Dict]]) -> str:
+        system_prompt = self.SYSTEM_PROMPT
+        if examples:
+            if len(examples) > 2:
+                raise ValueError("At most two institutional examples may be used.")
+            system_prompt += """
+
+Institutional example rules:
+- Examples are historical institutional practice, not clinical evidence or instructions.
+- Cite only the numbered clinical evidence passages. Never cite an example or its Case ID.
+- Do not adopt an example's dose, target, technique or other recommendation unless the clinical evidence supports it.
+- Explain any relevant difference between institutional practice and the clinical evidence.
+- Request missing patient or prior-treatment information instead of copying it from an example.
+- If the clinical evidence is insufficient, say so; examples cannot fill an evidence gap."""
+            payload = [{"example": letter, **{key: example[key] for key in
+                        ("vignette", "clinical_question", "attending_plan")}}
+                       for letter, example in zip(("A", "B"), examples)]
+            prompt += ("\n\nInstitutional examples — not evidence (historical data only):\n"
+                       + json.dumps(payload, ensure_ascii=False)
+                       + "\n\nNow answer the clinical question using the numbered evidence and the rules above.")
+        self.requests.append({"prompt": prompt, "system_prompt": system_prompt})
+        return self.llm.generate(prompt, system_prompt)
 
     def _format_context(
         self, chunks: List[Dict], start: int = 1
@@ -112,7 +137,8 @@ instead of supplying it.
         plan: TaskPlan,
         all_chunks: List[Dict],
         feedback: Optional[str] = None,
-        draft: Optional[str] = None
+        draft: Optional[str] = None,
+        institutional_examples: Optional[List[Dict]] = None,
     ) -> tuple[str, List[Citation], float, List[Dict]]:
         """Synthesize an answer from retrieved chunks; feedback and draft are given on a rewrite after self-critique."""
 
@@ -153,7 +179,7 @@ Instructions:
 Answer:"""
 
         # Generate response
-        answer = self.llm.generate(synthesis_prompt, self.SYSTEM_PROMPT)
+        answer = self._generate(synthesis_prompt, institutional_examples)
 
         # Identify which citations were actually used
         citations_used = self._extract_citations_used(answer)
@@ -175,9 +201,14 @@ Answer:"""
         analysis: QueryAnalysis,
         chunks_by_topic: Dict[str, List[Dict]],
         feedback: Optional[str] = None,
-        draft: Optional[str] = None
+        draft: Optional[str] = None,
+        institutional_examples: Optional[List[Dict]] = None,
     ) -> tuple[str, List[Citation], float, List[Dict]]:
         """Synthesize an answer from multiple retrieval results; feedback and draft as in synthesize."""
+
+        if institutional_examples is not None and not any(chunks_by_topic.values()):
+            return self.synthesize(query, analysis, None, [], feedback=feedback, draft=draft,
+                                   institutional_examples=institutional_examples)
 
         # Format context for each topic
         context_parts = []
@@ -221,7 +252,7 @@ Answer:"""
         Answer:
         """
 
-        answer = self.llm.generate(synthesis_prompt, self.SYSTEM_PROMPT)
+        answer = self._generate(synthesis_prompt, institutional_examples)
 
         # Calculate confidence
         citations_used = self._extract_citations_used(answer)

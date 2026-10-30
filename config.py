@@ -113,6 +113,9 @@ class FeatureConfig:
     """Switches for evaluated changes; each stays off until its evaluation supports turning it on in the web app."""
     site_filter: bool = False  # limit evidence to the user-selected disease site (core/site_routing.py)
     citation_check: bool = True  # check each citation against its passage after writing (core/citation_check.py)
+    institutional_examples: bool = False
+    past_case_index_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/past_case_index")
+    past_case_source_sha256: Optional[str] = None
 
 
 @dataclass
