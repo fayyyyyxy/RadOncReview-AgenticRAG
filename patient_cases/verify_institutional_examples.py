@@ -13,7 +13,7 @@ from config import Config
 from core.case_labels import CaseLabels, SETTING_GROUPS
 from core.institutional_examples import CaseContext, LocalInstitutionalExamples
 from core.past_cases import LABEL, MIN_SIMILARITY
-from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, development_examples, read_records, validate_records
+from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, read_records, validate_records
 
 
 def main(argv=None):
@@ -24,10 +24,10 @@ def main(argv=None):
     records = read_records(args.workbook)
     validate_records(records)
     development = [r for r in records if r["Split"] == "Development" and r["Worked-Example Eligible"] == "Yes"]
-    source = "".join(json.dumps(example, ensure_ascii=False) + "\n" for example in development_examples(records))
+    source_hash = hashlib.sha256((ROOT / "data" / "processed" / "development_examples.jsonl").read_bytes()).hexdigest()
     config = Config()
     provider = LocalInstitutionalExamples(args.past_case_index, config.embedding.model_id, config.embedding.dimension,
-                                         expected_source_sha256=hashlib.sha256(source.encode("utf-8")).hexdigest())
+                                         expected_source_sha256=source_hash)
     violations, counts, selections = Counter(), Counter(), []
 
     def no_embedding(text):

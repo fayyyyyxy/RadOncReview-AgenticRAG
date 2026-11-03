@@ -7,6 +7,8 @@ import json
 import faiss
 import numpy as np
 import re
+import os
+import tempfile
 from typing import List, Dict, Optional, Tuple
 from collections import Counter
 from sentence_transformers import CrossEncoder
@@ -195,15 +197,16 @@ class RetrieverManager:
         if self._faiss_index_loaded:
             return self._faiss_index
 
-        # Download from S3 to temp file
-        local_path = "/tmp/faiss_index.bin"
-        self.s3.download_file(
-            self.aws_config.s3_bucket,
-            self.aws_config.faiss_index_key,
-            local_path
-        )
+        # Download from S3 to a platform-safe temporary file.
+        with tempfile.TemporaryDirectory(prefix="radonc_faiss_") as temp_dir:
+            local_path = os.path.join(temp_dir, "faiss_index.bin")
+            self.s3.download_file(
+                self.aws_config.s3_bucket,
+                self.aws_config.faiss_index_key,
+                local_path
+            )
 
-        self._faiss_index = faiss.read_index(local_path)
+            self._faiss_index = faiss.read_index(local_path)
         self._faiss_index_loaded = True
         print(f"Loaded FAISS index with {self._faiss_index.ntotal} vectors")
         return self._faiss_index

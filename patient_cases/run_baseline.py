@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 sys.path.insert(0, str(REPO))
 
-from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, read_records, validate_records, development_examples
+from load_scenarios import DEFAULT_WORKBOOK, VIGNETTE, QUESTION, read_records, validate_records
 from config import LLMConfig
 from core.case_labels import SETTING_GROUPS, CaseLabels
 
@@ -169,9 +169,8 @@ def main(argv=None):
             from core.institutional_examples import CaseContext
             workbook_records = read_records(args.workbook)
             records = {r["Case ID"]: r for r in workbook_records}
-            source = "".join(json.dumps(example, ensure_ascii=False) + "\n"
-                             for example in development_examples(workbook_records))
-            config.features.past_case_source_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+            export_path = ROOT / "data" / "processed" / "development_examples.jsonl"
+            config.features.past_case_source_sha256 = hashlib.sha256(export_path.read_bytes()).hexdigest()
             case_contexts = {item["case_id"]: CaseContext(
                 vignette=item["vignette"], clinical_question=item["clinical_question"],
                 case_id=item["case_id"], patient_id=records[item["case_id"]]["Patient ID"],

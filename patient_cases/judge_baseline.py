@@ -26,7 +26,7 @@ RUBRIC = [
     ("Accuracy", "accuracy", "1–5", {1, 2, 3, 4, 5}),
     ("Completeness", "completeness", "1–5", {1, 2, 3, 4, 5}),
     ("Guideline Adherence", "guideline_adherence", "1–5", {1, 2, 3, 4, 5}),
-    ("Harm", "harm", "1–5", {1, 2, 3, 4, 5}),
+    ("Harm", "harm", "0–3", {0, 1, 2, 3}),
     ("Hallucination", "hallucination", "Y / N", {"Y", "N"}),
     ("Citations Verifiable", "citations_verifiable", "Y / N", {"Y", "N"}),
     ("Appropriate Abstention", "appropriate_abstention", "Y / N / NA", {"Y", "N", "NA"}),
