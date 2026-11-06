@@ -197,6 +197,31 @@ The batch was not kept: with the named gap the critique marked every item
 addressed, and completeness fell. --no-replan and --citation-flag-only turn on
 the other two switches on their own, for runs without the named gap.
 
+### Critic edits
+
+--critic-edits sets features.critic_edits. The critique then reads the
+passages along with the draft and returns sentence edits, which code applies,
+so every sentence it does not name stays exactly as written. An edit splits a
+sentence that mixes a passage's fact with inference, cites a number a passage
+states (or else says the evidence does not give it), corrects a citation
+number, adds an item a passage covers that the answer leaves out, or replaces a
+recommendation that would harm the patient. It never adds a caveat or a
+reminder. A named gap counts only if no passage covers the item. Only a wrong
+main recommendation is rewritten, from the first round's passages, without a
+re-plan. metadata.critic_edits lists the edits applied and those whose sentence
+was not found (docs/rag_improvement_plan_v2.md, E4).
+
+The critique also lists, at most three, the items no passage covers, each with
+a search query. Each is searched once in the review notes and once in the trial
+papers, within the first round's scope, keeping up to three passages the answer
+did not already have. The writer's model then writes a sentence for an item
+only if a new passage states it for this patient's condition and setting, and
+the critique reads the answer once more, with edits only. --critic-model runs
+the critique, both passes, on a model of its own, such as
+us.openai.gpt-5.6-sol; the manifest records what that model was sent under
+critic_sampling_sent. metadata.critic_edits also lists the gaps, the new passage
+numbers, the fill and the second pass.
+
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
 attending plan separate for review. Later, development attending plans may be

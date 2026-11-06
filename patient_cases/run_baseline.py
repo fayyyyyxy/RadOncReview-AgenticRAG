@@ -175,6 +175,11 @@ def main(argv=None):
                         help="After a critique, rewrite from the first round's passages without searching again.")
     parser.add_argument("--citation-flag-only", action="store_true",
                         help="Keep the citations the check rejects in the answer and only list them in its report.")
+    parser.add_argument("--critic-edits", action="store_true",
+                        help="The critique reads the passages and returns sentence edits, which code applies; only a "
+                             "wrong main recommendation is rewritten (docs/rag_improvement_plan_v2.md, E4).")
+    parser.add_argument("--critic-model", help="Bedrock model ID for the self-critique alone, e.g. "
+                                               "us.openai.gpt-5.6-sol; every other call keeps --model.")
     args = parser.parse_args(argv)
     try:
         for flag, value in (("--name", args.name), ("--replay-plans", args.replay_plans)):
@@ -199,6 +204,7 @@ def main(argv=None):
                 "institutional_examples": args.institutional_examples, "replayed_plans": args.replay_plans,
                 "repair_batch": args.repair_batch, "replan": not (args.no_replan or args.repair_batch),
                 "citation_flag_only": args.citation_flag_only or args.repair_batch,
+                "critic_edits": args.critic_edits, "critic_model": args.critic_model,
                 "example_index_validation": "not_performed_in_dry_run" if args.institutional_examples else "not_requested",
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
@@ -219,6 +225,8 @@ def main(argv=None):
         config.features.institutional_examples = args.institutional_examples
         config.features.replan = not args.no_replan
         config.features.citation_flag_only = args.citation_flag_only
+        config.features.critic_edits = args.critic_edits
+        config.features.critic_model = args.critic_model
         if args.repair_batch:
             # 💡 One flag for the batch, so a run never carries half of it
             config.features.replan = False
@@ -283,6 +291,11 @@ def main(argv=None):
                 sent = engine.llm.sampling_sent
                 if any(manifest["config"]["llm"][key] != value for key, value in sent.items()):
                     manifest["config"]["llm"].update(sent)
+                    (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+                # The critique's own model may reject them too, and its client keeps its own record
+                critic = engine.self_critic.llm
+                if critic is not engine.llm and manifest.get("critic_sampling_sent") != critic.sampling_sent:
+                    manifest["critic_sampling_sent"] = critic.sampling_sent
                     (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
                 print(f"{item['case_id']}: {result['status']}", flush=True)
         except Exception as exc:

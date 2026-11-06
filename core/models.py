@@ -117,6 +117,12 @@ class SelfCritiqueResult:
     suggestions: List[str] = field(default_factory=list)
     # What the question asks for, each with addressed and gap; is_complete and missing_aspects are derived from it
     checklist: List[Dict[str, Any]] = field(default_factory=list)
+    # Under critic edits (core/critic_edits.py): the sentence edits returned, and whether the whole recommendation
+    # is wrong, the one case that still rewrites the answer
+    edits: List[Dict[str, Any]] = field(default_factory=list)
+    main_recommendation_wrong: bool = False
+    # Items the question asks for that no passage covers, each with a query to search for it
+    gaps: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

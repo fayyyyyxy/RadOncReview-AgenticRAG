@@ -9,7 +9,7 @@ from datetime import datetime
 
 from .models import (
     AgentResponse, TaskPlan, QueryAnalysis, Citation,
-    SelfCritiqueResult, TaskStatus, QueryIntent, RetrievedChunk
+    SelfCritiqueResult, TaskStatus, QueryIntent, RetrievedChunk, SubTask, RetrievalStrategy
 )
 from config import Config, default_config
 from .llm_client import create_llm_client, BaseLLMClient
@@ -18,6 +18,7 @@ from .task_planner import TaskPlanner
 from .retriever import RetrieverManager, MockRetrieverManager
 from .synthesizer import ResponseSynthesizer, SelfCritic
 from .citation_check import CitationChecker, cited
+from .critic_edits import GAP_LIMIT, GapFiller, apply_edits
 from .guardrails import GuardrailManager
 from .case_labels import CaseLabels
 from .site_routing import EvidenceScope, scope_for, table_fingerprint
@@ -79,7 +80,14 @@ class AgenticRAGEngine:
             )
 
         self.synthesizer = ResponseSynthesizer(self.llm, self.config)
-        self.self_critic = SelfCritic(self.llm, self.config.agent, named_gap=self.config.features.critic_named_gap)
+        # The critique may run on a model of its own, so the answer is checked by a model other than its writer
+        critic_model = self.config.features.critic_model
+        critic_llm = create_llm_client(replace(self.config.llm, model_id=critic_model), self.config.aws,
+                                       use_mock=use_mock) if critic_model else self.llm
+        self.self_critic = SelfCritic(critic_llm, self.config.agent, named_gap=self.config.features.critic_named_gap,
+                                      edits=self.config.features.critic_edits)
+        # The sentence for a searched gap is answer text, so the writer's model writes it and the critique checks it
+        self.gap_filler = GapFiller(self.llm)
         self.citation_checker = CitationChecker(self.llm)
         self.guardrails = GuardrailManager(self.config.guardrail)
 
@@ -157,7 +165,7 @@ class AgenticRAGEngine:
         return final_chunks
 
     # !!!! NEW METHOD FOR COMPARISON/COMPLEX QUERIES !!!!
-    def _collect_multi_topic_chunks(self, plan: TaskPlan) -> Dict[str, List[Dict]]:
+    def _collect_multi_topic_chunks(self, plan: TaskPlan, exclude: Optional[set] = None) -> Dict[str, List[Dict]]:
         """
         Collect chunks for comparison/complex queries with balanced per-topic reranking.
 
@@ -190,7 +198,8 @@ class AgenticRAGEngine:
         # ⚠️ Repeats across topics are removed after reranking, not before. Removing them first took every
         # candidate of an earlier topic, including the ones its reranking dropped, out of later topics' pools.
         reranked_by_topic = {}
-        taken = set()  # passages already given to an earlier topic
+        # Passages already given to an earlier topic, or to the answer before this search (exclude)
+        taken = set(exclude or ())
 
         for topic_key, data in chunks_by_topic.items():
             label = data["label"]
@@ -278,6 +287,43 @@ class AgenticRAGEngine:
                 # 💡 setdefault: a re-planned search worded like a first-round one joins that topic
                 merged.setdefault(topic, []).extend(new)
         return merged
+
+    def _search_gaps(self, query: str, plan: TaskPlan, scope: EvidenceScope, gaps: List[Dict], answer: str,
+                     first_chunks: List[Dict], passages: List[Dict], report: Dict) -> tuple:
+        """Search once for each gap the critique verified and add what a new passage covers (critic edits).
+
+        Returns the answer, the passages, the plan with the searches added, and whether any text was added."""
+        # The limit is kept here, where the searches happen, whatever the critique returned
+        gaps = gaps[:GAP_LIMIT]
+        report.update({"gaps": gaps, "gap_passages": [], "fill": None})
+        if not gaps:
+            return answer, passages, plan, False
+        retriever = self.config.retriever
+        # 💡 Paired as the planner pairs them, one search of the review notes and one of the trial papers, and
+        # labelled with the item, so each gap is reranked against the question plus that item
+        tasks = [SubTask(task_id=f"gap_{i}_{source}", description=f"{prefix} {gap['item']}", query=gap["query"],
+                         retrieval_strategy=strategy, top_k=top_k, status=TaskStatus.PENDING)
+                 for i, gap in enumerate(gaps, start=1)
+                 for source, prefix, strategy, top_k in (
+                     ("notes", "[Guidelines]", RetrievalStrategy.DENSE, retriever.faiss_complex_top_k),
+                     ("trials", "[Trial papers]", RetrievalStrategy.KNOWLEDGE_BASE, retriever.kb_complex_top_k))]
+        for task in tasks:
+            self.retriever.execute_task(task, scope)
+        # ⚠️ The answer's own passages are left out before the cut, so each gap keeps up to three new ones; the
+        # critique already found that they do not cover it
+        found = self._collect_multi_topic_chunks(replace(plan, sub_tasks=tasks),
+                                                 exclude={self._chunk_key(c) for c in first_chunks})
+        new_chunks = [c for chunks in found.values() for c in chunks]
+        plan = replace(plan, sub_tasks=plan.sub_tasks + tasks)
+        self._log_reasoning("GAPS", f"Searched {len(gaps)} gaps, found {len(new_chunks)} new passages")
+        if not new_chunks:
+            return answer, passages, plan, False
+        start = max((p["citation_id"] for p in passages), default=0) + 1
+        context, added = self.synthesizer.extend_passages(new_chunks, start)
+        report["gap_passages"] = [p["citation_id"] for p in added]
+        answer, report["fill"] = apply_edits(answer, self.gap_filler.fill(query, answer, gaps, context))
+        self._log_reasoning("GAPS", f"Filled {len(report['fill']['applied'])} of {len(gaps)} gaps")
+        return answer, passages + added, plan, bool(report["fill"]["applied"])
 
     def _enrich_citations_with_urls(self, citations: List[Citation]) -> List[Citation]:
         for citation in citations:
@@ -450,17 +496,33 @@ class AgenticRAGEngine:
 
         # ========== Step 6: Self-Critique ==========
         critique = None
+        edit_report = None
+        edits_on = self.config.features.critic_edits
         if self.config.agent.enable_self_critique:
             self._log_reasoning("CRITIQUE", "Performing self-evaluation")
             # Kept with the critique, so why an answer was rewritten can be read against the text that was judged
             first_draft = answer
-            critique = self.self_critic.critique(processed_query, answer, analysis)
+            # Only the edit critique reads the passages; the default one never did
+            extra = {"passages": context_passages} if edits_on else {}
+            critique = self.self_critic.critique(processed_query, answer, analysis, **extra)
 
             self._log_reasoning("CRITIQUE",
                 f"Complete: {critique.is_complete}, "
                 f"Safe: {critique.is_safe}, "
                 f"Confidence: {critique.confidence_score:.2f}"
             )
+
+            if edits_on:
+                edit_report = {"edits": len(critique.edits), "applied": [], "failed": [],
+                               "rewritten": critique.main_recommendation_wrong}
+            if edits_on and critique.edits and not critique.main_recommendation_wrong:
+                answer, edit_report = apply_edits(answer, critique.edits)
+                edit_report["rewritten"] = False
+                # 💡 An edit may cite a passage the draft did not, so the source list follows the edited answer
+                citations = [c for c in self.synthesizer.citations if c.citation_id in cited(answer)]
+                confidence = (confidence + critique.confidence_score) / 2
+                self._log_reasoning("CRITIQUE",
+                    f"Applied {len(edit_report['applied'])} of {edit_report['edits']} edits")
 
             # Retry if critique suggests improvement needed
             if self.self_critic.should_retry(critique):
@@ -470,7 +532,9 @@ class AgenticRAGEngine:
                 guidance = self.self_critic.get_improvement_guidance(critique)
 
                 improved_plan = None
-                if self.config.features.replan:
+                # ⚠️ Under critic edits the rewrite of a wrong recommendation does not re-plan either: it works
+                # from the first round's passages, and only the gaps are searched, after the retry
+                if self.config.features.replan and not edits_on:
                     # Replan with feedback
                     improved_plan = self.task_planner.replan(plan, guidance)
 
@@ -483,7 +547,8 @@ class AgenticRAGEngine:
                     # ⚠️ Re-plan passages carried 6 of 11 judged table and attribution errors and added 8-20 searches
                     # per case; without them the rewrite works from the first round's passages, the feedback and
                     # its own draft
-                    self._log_reasoning("CRITIQUE", "Rewriting from the first round's passages (re-plan off)")
+                    self._log_reasoning("CRITIQUE", "Rewriting from the first round's passages"
+                                        + (" (main recommendation wrong)" if edits_on else " (re-plan off)"))
 
                 # Re-synthesize — use same path as first attempt based on query type
                 # ⚠️ The new passages are added to the first round's, not swapped in, so a rewrite asked to fill a
@@ -513,6 +578,22 @@ class AgenticRAGEngine:
                 # The recorded plan lists every search the answer drew on; a failed replan returns the plan unchanged
                 if improved_plan is not None and improved_plan is not plan:
                     plan = replace(improved_plan, sub_tasks=plan.sub_tasks + improved_plan.sub_tasks)
+
+            if edits_on:
+                multi = analysis.intent == QueryIntent.COMPARISON or analysis.is_complex
+                first_chunks = [c for chunks in chunks_by_topic.values() for c in chunks] if multi else all_chunks
+                answer, context_passages, plan, added = self._search_gaps(
+                    processed_query, plan, scope, critique.gaps, answer, first_chunks, context_passages, edit_report)
+                edit_report["second"] = None
+                # ⚠️ New text, from a gap search or a rewrite, is checked once more; that pass only edits, so the
+                # loop ends there
+                if added or critique.main_recommendation_wrong:
+                    second = self.self_critic.critique(processed_query, answer, analysis, passages=context_passages)
+                    answer, edit_report["second"] = apply_edits(answer, second.edits)
+                    self._log_reasoning("CRITIQUE", f"Second pass applied {len(edit_report['second']['applied'])} "
+                                                    f"of {edit_report['second']['edits']} edits")
+                # 💡 The source list follows the final answer, which may cite a passage the draft did not
+                citations = [c for c in self.synthesizer.citations if c.citation_id in cited(answer)]
 
         # ========== Step 6b: Citation Check ==========
         # After any retry, so the final answer is the one checked
@@ -599,6 +680,8 @@ class AgenticRAGEngine:
             response.metadata["citation_check"] = citation_check
         if critique is not None:
             response.metadata["first_draft"] = first_draft
+        if edit_report is not None:
+            response.metadata["critic_edits"] = edit_report
 
         # ========== Step 8: LLM Judge Evaluation ==========
         if self.enable_judge:

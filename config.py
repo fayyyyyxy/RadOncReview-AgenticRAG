@@ -118,6 +118,13 @@ class FeatureConfig:
     replan: bool = True  # after a critique, search again with a re-plan; False rewrites from the first round's passages
     critic_named_gap: bool = False  # the critique counts "the provided evidence does not cover it" as addressed
     citation_flag_only: bool = False  # rejected citations stay in the answer and are only listed in the report
+    # The critique reads the passages and returns sentence edits, which code applies; only a wrong main
+    # recommendation is rewritten, from the first round's passages; only items no passage covers are searched
+    # for again (docs/rag_improvement_plan_v2.md, E4)
+    critic_edits: bool = False
+    # A model ID for the self-critique alone, so the answer is checked by a model other than the one that wrote it;
+    # None keeps the shared client
+    critic_model: Optional[str] = None
     past_case_index_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/past_case_index")
     past_case_source_sha256: Optional[str] = None
 

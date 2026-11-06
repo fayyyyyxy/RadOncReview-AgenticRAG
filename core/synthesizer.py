@@ -10,6 +10,7 @@ from .models import (
 )
 from .llm_client import BaseLLMClient
 from .citation_check import GROUP, cited, split_references
+from .critic_edits import GAP_LIMIT, valid_edits
 from .query_analyzer import as_bool
 from config import AgentConfig, Config
 
@@ -35,6 +36,9 @@ Guidelines for your responses:
         self.llm = llm_client
         self.config = config
         self.requests = []
+        # Every passage's citation from the last answer written, cited or not, so an answer edited afterwards can
+        # list a passage the edit newly cites
+        self.citations: List[Citation] = []
 
     def _generate(self, prompt: str, examples: Optional[List[Dict]]) -> str:
         system_prompt = self.SYSTEM_PROMPT
@@ -104,6 +108,13 @@ Institutional example rules:
         context = "\n---\n".join(context_parts)
         return context, citations, passages
 
+    def extend_passages(self, chunks: List[Dict], start: int) -> tuple[str, List[Dict]]:
+        """Number passages found after the answer was written from start on, add their citations to
+        self.citations, and return them as the writer would read them and as context passages."""
+        context, citations, passages = self._format_context(chunks, start=start)
+        self.citations = self.citations + citations
+        return context, passages
+
     def _extract_citations_used(self, answer: str) -> List[int]:
         """Extract citation numbers used in the answer, including [4, 5] and [1-3]."""
         return list(cited(answer))
@@ -143,6 +154,7 @@ instead of supplying it.
         """Synthesize an answer from retrieved chunks; feedback and draft are given on a rewrite after self-critique."""
 
         if not all_chunks:
+            self.citations = []
             return (
                 "I could not find relevant information in the knowledge base to answer "
                 "your question. Please try rephrasing your query or ask about a different topic.",
@@ -153,6 +165,7 @@ instead of supplying it.
 
         # Format context and prepare citations
         context, all_citations, passages = self._format_context(all_chunks)
+        self.citations = all_citations
         revision = self._revision_request(feedback, draft)
 
         # Build synthesis prompt
@@ -234,6 +247,7 @@ Answer:"""
             all_passages.extend({**p, "topic": topic, "group": group} for p in topic_passages)
 
         full_context = "\n\n".join(context_parts)
+        self.citations = all_citations
         revision = self._revision_request(feedback, draft)
 
         synthesis_prompt = f"""
@@ -292,18 +306,31 @@ Evaluate the following answer for completeness and safety."""
                       "says the provided evidence does not cover the item. General background, or an answer for "
                       "another condition or setting, does not count.")
 
-    def __init__(self, llm_client: BaseLLMClient, config: Config, named_gap: bool = False):
+    # ⚠️ The named gap without the passages took the writer's word for every gap: 0 of 161 items came back
+    # unaddressed. Reading the passages, the critique can tell a true gap from a skipped one
+    VERIFIED_GAP_RULE = ("Mark an item addressed if the answer gives a specific recommendation for this patient, or "
+                         "if it says the provided evidence does not cover the item and no passage covers it. If a "
+                         "passage covers it, the item is not addressed. General background, or an answer for another "
+                         "condition or setting, does not count.")
+    EDIT_PROMPT = """You are a radiation oncology expert reviewer.
+Check the following answer against the passages it was written from, and correct it sentence by sentence."""
+
+    def __init__(self, llm_client: BaseLLMClient, config: Config, named_gap: bool = False, edits: bool = False):
         self.llm = llm_client
         self.config = config
         self.addressed_rule = self.NAMED_GAP_RULE if named_gap else self.ADDRESSED_RULE
+        self.edits = edits
 
     def critique(
         self,
         query: str,
         answer: str,
-        analysis: QueryAnalysis
+        analysis: QueryAnalysis,
+        passages: Optional[List[Dict]] = None
     ) -> SelfCritiqueResult:
-        """Perform self-critique on the generated answer."""
+        """Perform self-critique on the generated answer; under critic edits it also reads the passages."""
+        if self.edits:
+            return self._critique_with_edits(query, answer, analysis, passages or [])
 
         # ⚠️ "Cite the supporting evidence" stays off the checklist: a rewrite told to name trials would invent them,
         # and naming a trial, study or year is where most judged hallucinations were.
@@ -370,8 +397,105 @@ Respond in JSON format:
             confidence_score=0.5
         )
 
+    def _critique_with_edits(self, query: str, answer: str, analysis: QueryAnalysis,
+                             passages: List[Dict]) -> SelfCritiqueResult:
+        """The checklist, sentence edits for code to apply, and whether the main recommendation is wrong."""
+        # 💡 Numbered as the writer cited them, so a gap, a number or a citation can be checked against the passage
+        evidence = "\n\n".join(f"[{p['citation_id']}] {p['text']}" for p in passages)
+        # ⚠️ No caveats or reminders: inserted as edits, they would grow the answer the way the rewrites did, when
+        # 58% of 155 safety concerns asked for one and the judge did not reward them
+        critique_prompt = f"""Check this radiation oncology answer against the numbered passages it was written from.
+
+Question: {query}
+Query Type: {analysis.intent.value}
+
+Passages:
+{evidence}
+
+Answer:
+{answer}
+
+1. List each thing the question explicitly asks for, in the question's own words. Do not add anything the question \
+does not ask about. Leave out requests to cite sources; citations are checked separately.
+2. {self.VERIFIED_GAP_RULE}
+3. List edits to the answer. Each edit copies one sentence of the answer exactly as "sentence", and either replaces \
+it ("action": "replace") or adds new text after it ("action": "insert_after"). Make only these kinds of edit:
+- "split": the sentence cites a passage but also says something that passage does not. Replace it with the part \
+the passage supports, keeping its citation, and the rest as a separate sentence without a citation.
+- "cite": the sentence gives a number (a dose, fractions, a percentage, a volume or a limit) without a citation. If \
+a passage states the number, add that passage's citation; if none does, replace the number with a statement that \
+the provided evidence does not give it.
+- "recite": the sentence cites a passage that does not state it while another passage does. Change the citation \
+number.
+- "add": a passage covers something the question asks for that the answer leaves out or calls missing. Insert one \
+sentence with that passage's citation after the most closely related sentence.
+- "harm": following the sentence would harm this patient: an unsafe dose, target or drug, a contraindication, or \
+an organ-at-risk limit exceeded. Replace it with a safe statement.
+Do not add caveats, reminders, counselling, or advice to seek review. Cite only the passage numbers above, and \
+state nothing that neither the passages, the question nor the answer states.
+4. Set "main_recommendation_wrong" to true only if the answer's overall recommendation for the question, whether \
+to treat or the treatment approach as a whole, is wrong for this patient, and give the reason. A wrong sentence is \
+an edit, not this.
+5. List under "gaps" each thing the question asks for that no passage covers, at most three, each with a short \
+search query for the evidence that would cover it for this patient.
+
+Respond in JSON format:
+{{
+    "checklist": [{{"item": "<what the question asks for>", "addressed": <true or false>, \
+"gap": "<what is missing, if not addressed>"}}],
+    "edits": [{{"kind": "<split, cite, recite, add or harm>", "action": "<replace or insert_after>", \
+"sentence": "<copied exactly from the answer>", "text": "<the new text>"}}],
+    "gaps": [{{"item": "<what the question asks for>", "query": "<search query>"}}],
+    "main_recommendation_wrong": <true or false>,
+    "main_recommendation_reason": "<why, if true>",
+    "confidence_score": <0.0-1.0 overall confidence>
+}}"""
+
+        try:
+            result = self.llm.generate_structured(
+                critique_prompt,
+                output_schema={
+                    "checklist": "array",
+                    "edits": "array",
+                    "gaps": "array",
+                    "main_recommendation_wrong": "boolean",
+                    "main_recommendation_reason": "string",
+                    "confidence_score": "number"
+                },
+                system_prompt=self.EDIT_PROMPT
+            )
+            checklist = [c for c in result.get("checklist") or [] if isinstance(c, dict) and str(c.get("item", "")).strip()]
+            if "error" not in result and checklist:
+                missing = [f"{c['item']}: {c.get('gap') or 'not addressed'}"
+                           for c in checklist if not as_bool(c.get("addressed"), default=True)]
+                # An edit code cannot apply is dropped here; one whose sentence is not found is reported later
+                edits = valid_edits(result.get("edits"))
+                gaps = [g for g in result.get("gaps") or [] if isinstance(g, dict)
+                        and str(g.get("item", "")).strip() and str(g.get("query", "")).strip()][:GAP_LIMIT]
+                wrong = as_bool(result.get("main_recommendation_wrong"), default=False)
+                reason = str(result.get("main_recommendation_reason") or "").strip()
+                return SelfCritiqueResult(
+                    is_complete=not missing,
+                    is_safe=not wrong and not any(e.get("kind") == "harm" for e in edits),
+                    missing_aspects=missing,
+                    concerns=[reason or "no reason given"] if wrong else [],
+                    confidence_score=result.get("confidence_score", 0.5),
+                    checklist=checklist,
+                    edits=edits,
+                    main_recommendation_wrong=wrong,
+                    gaps=gaps
+                )
+        except Exception as e:
+            print(f"Self-critique failed: {e}")
+
+        # A failed critique changes nothing
+        return SelfCritiqueResult(is_complete=True, is_safe=True, confidence_score=0.5)
+
     def should_retry(self, critique: SelfCritiqueResult) -> bool:
         """Determine if the answer should be regenerated."""
+        if self.edits:
+            # Everything else is an edit; only a wrong recommendation as a whole is written again
+            return critique.main_recommendation_wrong
         # Retry if not safe, confidence is very low, or anything the question asks for is missing
         if not critique.is_safe:
             return True
@@ -382,6 +506,8 @@ Respond in JSON format:
 
     def get_improvement_guidance(self, critique: SelfCritiqueResult) -> str:
         """Generate guidance for improving the answer."""
+        if self.edits:
+            return f"The overall recommendation is wrong for this patient: {'; '.join(critique.concerns)}"
         guidance_parts = []
 
         if not critique.is_complete:
