@@ -128,6 +128,10 @@ class FeatureConfig:
     # Rank each topic's candidates against the selected disease site and the topic's label, not the whole vignette
     # and the label (docs/rag_improvement_plan_v2.md, E2 option (b)); with no site selected the vignette is kept
     rerank_site_query: bool = False
+    # The writer answers under the seven parts of the workbook's Completeness anchor and the critique checks them as
+    # well as what the question asks; a part no passage covers gets the usual practice, marked as not in the evidence
+    # (docs/rag_improvement_plan_v2.md, E1). The critic-edits critique is not changed
+    completeness_template: bool = False
     past_case_index_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/past_case_index")
     past_case_source_sha256: Optional[str] = None
 

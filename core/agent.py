@@ -85,7 +85,8 @@ class AgenticRAGEngine:
         critic_llm = create_llm_client(replace(self.config.llm, model_id=critic_model), self.config.aws,
                                        use_mock=use_mock) if critic_model else self.llm
         self.self_critic = SelfCritic(critic_llm, self.config.agent, named_gap=self.config.features.critic_named_gap,
-                                      edits=self.config.features.critic_edits)
+                                      edits=self.config.features.critic_edits,
+                                      template=self.config.features.completeness_template)
         # The sentence for a searched gap is answer text, so the writer's model writes it and the critique checks it
         self.gap_filler = GapFiller(self.llm)
         self.citation_checker = CitationChecker(self.llm)

@@ -183,6 +183,9 @@ def main(argv=None):
     parser.add_argument("--rerank-site-query", action="store_true",
                         help="Rank each topic's passages against the case's disease site and the topic label instead "
                              "of the whole vignette (docs/rag_improvement_plan_v2.md, E2 option (b)).")
+    parser.add_argument("--completeness-template", action="store_true",
+                        help="Answer under the seven parts of the workbook's Completeness anchor and have the critique "
+                             "check them too (docs/rag_improvement_plan_v2.md, E1).")
     args = parser.parse_args(argv)
     try:
         for flag, value in (("--name", args.name), ("--replay-plans", args.replay_plans)):
@@ -209,6 +212,7 @@ def main(argv=None):
                 "citation_flag_only": args.citation_flag_only or args.repair_batch,
                 "critic_edits": args.critic_edits, "critic_model": args.critic_model,
                 "rerank_site_query": args.rerank_site_query,
+                "completeness_template": args.completeness_template,
                 "example_index_validation": "not_performed_in_dry_run" if args.institutional_examples else "not_requested",
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
@@ -232,6 +236,7 @@ def main(argv=None):
         config.features.critic_edits = args.critic_edits
         config.features.critic_model = args.critic_model
         config.features.rerank_site_query = args.rerank_site_query
+        config.features.completeness_template = args.completeness_template
         if args.repair_batch:
             # 💡 One flag for the batch, so a run never carries half of it
             config.features.replan = False

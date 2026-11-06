@@ -14,6 +14,13 @@ from .critic_edits import GAP_LIMIT, valid_edits
 from .query_analyzer import as_bool
 from config import AgentConfig, Config
 
+# The parts of a complete answer under the completeness template, in the order of the workbook's Completeness anchor
+# ("covers indication, targets, dose/fractionation, technique, key OAR constraints, systemic therapy and follow-up
+# where relevant"). 💡 One list for the writer and the critique, so the headings written and the parts checked cannot
+# drift apart
+PLAN_PARTS = ("Indication", "Target volumes", "Dose and fractionation", "Technique", "Organ-at-risk constraints",
+              "Systemic therapy", "Follow-up")
+
 
 class ResponseSynthesizer:
     """Synthesizes final answers from retrieved information."""
@@ -31,17 +38,25 @@ Guidelines for your responses:
 7. Highlight any safety-critical information
 8. For specific clinical scenarios or rare conditions, focus on the exact scenario mentioned"""
 
+    # ⚠️ The template covers parts the question may not ask about, which guidelines 1 and 2 forbid; told both, the
+    # writer would have to break one. Under the template they ask for brevity within each part instead
+    TEMPLATE_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
+        "1. **Directly answer the specific question asked - avoid tangential information**\n"
+        "2. Be concise and focused - only include what's necessary to answer the question",
+        "1. **Answer the specific question asked under the part of the answer it belongs to**\n"
+        "2. Be concise within each part - only include what this patient needs")
 
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
+        self.template = config.features.completeness_template
         self.requests = []
         # Every passage's citation from the last answer written, cited or not, so an answer edited afterwards can
         # list a passage the edit newly cites
         self.citations: List[Citation] = []
 
     def _generate(self, prompt: str, examples: Optional[List[Dict]]) -> str:
-        system_prompt = self.SYSTEM_PROMPT
+        system_prompt = self.TEMPLATE_SYSTEM_PROMPT if self.template else self.SYSTEM_PROMPT
         if examples:
             if len(examples) > 2:
                 raise ValueError("At most two institutional examples may be used.")
@@ -119,6 +134,27 @@ Institutional example rules:
         """Extract citation numbers used in the answer, including [4, 5] and [1-3]."""
         return list(cited(answer))
 
+    def _template_request(self) -> str:
+        """The answer template's instructions; empty with the switch off, so the prompts stay as the tag sends them."""
+        if not self.template:
+            return ""
+        # ⚠️ A part no passage covers is supplied as usual practice, marked and uncited: the judge scores a part
+        # named as missing as missing, but a correct statement absent from the passages is no hallucination to it.
+        # Uncited, it cannot make a citation fail. A detail the case leaves out is assumed out loud, not asserted:
+        # the judge flags "45 Gy in 25 fractions" for a case that gives 45 Gy, and declining cost GU-034 its dose.
+        # The cap per heading keeps seven parts from growing the answer the way rewrites did (+71% median)
+        return f"""
+Write the answer under these headings, in this order: {"; ".join(PLAN_PARTS)}.
+- Answer what the question asks under the heading it belongs to.
+- Under each heading give the recommendation for this patient, citing the passages that support it.
+- If no passage covers a heading, give the usual practice without a citation and mark it \
+"(not in the provided evidence)".
+- If the answer depends on a case detail that is not given, state the assumption, answer under it, and say what to \
+confirm.
+- If a heading does not apply to this patient or this question, write "Not applicable" and the reason in a few words.
+- Write at most three sentences or bullet points under each heading.
+"""
+
     def _revision_request(self, feedback: Optional[str], draft: Optional[str]) -> str:
         """What a rewrite after self-critique is asked to change; empty for a first draft, whose prompt stays as it was."""
         if not feedback:
@@ -167,6 +203,10 @@ instead of supplying it.
         context, all_citations, passages = self._format_context(all_chunks)
         self.citations = all_citations
         revision = self._revision_request(feedback, draft)
+        template = self._template_request()
+        # Three to five sentences cannot cover seven parts
+        concise = ("Be concise within each heading" if self.template
+                   else "Be concise - aim for 3-5 sentences unless the question requires more detail")
 
         # Build synthesis prompt
         synthesis_prompt = f"""Based on the following retrieved information, answer the clinical question.
@@ -183,12 +223,12 @@ Retrieved Information:
 Instructions:
 1. **Answer the EXACT question asked - focus on the specific scenario or condition mentioned**
 2. Prioritize the most directly relevant information from the sources
-3. Be concise - aim for 3-5 sentences unless the question requires more detail
+3. {concise}
 4. Cite sources using [1], [2], etc. (use separate brackets for each citation)
 5. Only include general background information if the specific question is fully addressed first
 6. If key information is missing from the sources, state what's missing
 7. Highlight any important safety considerations
-{revision}
+{template}{revision}
 Answer:"""
 
         # Generate response
@@ -249,6 +289,7 @@ Answer:"""
         full_context = "\n\n".join(context_parts)
         self.citations = all_citations
         revision = self._revision_request(feedback, draft)
+        template = self._template_request()
 
         synthesis_prompt = f"""
         Answer the following clinical question using the grouped information below.
@@ -267,7 +308,7 @@ Answer:"""
         6. Preserve distinctions between subtopics when relevant
         7. Highlight key differences or relationships if the question involves comparison
         8. Note any guideline recommendations or safety considerations
-{revision}
+{template}{revision}
         Answer:
         """
 
@@ -315,10 +356,26 @@ Evaluate the following answer for completeness and safety."""
     EDIT_PROMPT = """You are a radiation oncology expert reviewer.
 Check the following answer against the passages it was written from, and correct it sentence by sentence."""
 
-    def __init__(self, llm_client: BaseLLMClient, config: Config, named_gap: bool = False, edits: bool = False):
+    QUESTION_ITEMS = ("List each thing the question explicitly asks for, in the question's own words. Do not add "
+                      "anything the question does not ask about. Leave out requests to cite sources; citations are "
+                      "checked separately.")
+    # ⚠️ Checking only what the question asks passed answers the judge marked down: 0 of 80 checklists held follow-up
+    # and 14 held OAR constraints, the two parts the judge most often found missing. The template checks its parts
+    # too, and "not applicable" keeps a part that does not apply from sending an answer back for nothing
+    TEMPLATE_ITEMS = ("List each thing the question explicitly asks for, in the question's own words. Then add each "
+                      f"of these parts of a complete answer that the list does not already cover: "
+                      f"{'; '.join(PLAN_PARTS)}. Leave out requests to cite sources; citations are checked separately.")
+    NOT_APPLICABLE_RULE = (" A part the answer marks not applicable counts as addressed if it truly does not apply to "
+                           "this patient; if it does apply, it is not addressed.")
+
+    def __init__(self, llm_client: BaseLLMClient, config: Config, named_gap: bool = False, edits: bool = False,
+                 template: bool = False):
         self.llm = llm_client
         self.config = config
-        self.addressed_rule = self.NAMED_GAP_RULE if named_gap else self.ADDRESSED_RULE
+        self.template = template
+        self.items_rule = self.TEMPLATE_ITEMS if template else self.QUESTION_ITEMS
+        self.addressed_rule = ((self.NAMED_GAP_RULE if named_gap else self.ADDRESSED_RULE)
+                               + (self.NOT_APPLICABLE_RULE if template else ""))
         self.edits = edits
 
     def critique(
@@ -335,7 +392,8 @@ Check the following answer against the passages it was written from, and correct
         # ⚠️ "Cite the supporting evidence" stays off the checklist: a rewrite told to name trials would invent them,
         # and naming a trial, study or year is where most judged hallucinations were.
         # ⚠️ No example items either: given "for example ... follow-up", the model listed follow-up as missing in 23
-        # of 40 answers although no question asked for it
+        # of 40 answers although no question asked for it. The template lists its parts on purpose, with "not
+        # applicable" as the way out
         critique_prompt = f"""Evaluate this radiation oncology answer:
 
 Question: {query}
@@ -344,8 +402,7 @@ Query Type: {analysis.intent.value}
 Answer:
 {answer}
 
-1. List each thing the question explicitly asks for, in the question's own words. Do not add anything the question \
-does not ask about. Leave out requests to cite sources; citations are checked separately.
+1. {self.items_rule}
 2. {self.addressed_rule}
 3. Note any recommendation that could harm this patient if followed.
 

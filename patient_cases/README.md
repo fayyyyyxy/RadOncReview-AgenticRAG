@@ -232,6 +232,22 @@ web app); with no site selected the vignette is kept. A re-planned topic usually
 has no label, so it ranks on the site alone. On run3's 1,014 sent passages the
 on-site against off-site AUC is 0.75, against 0.54 with the vignette.
 
+### Completeness template
+
+--completeness-template sets features.completeness_template. The writer then
+answers under the seven parts of the workbook's Completeness anchor (indication,
+target volumes, dose and fractionation, technique, organ-at-risk constraints,
+systemic therapy, follow-up). For a part no passage covers it gives the usual
+practice, uncited and marked "(not in the provided evidence)"; for a case detail
+the vignette leaves out it states its assumption and answers under it; for a
+part that does not apply it writes "Not applicable" with a reason. A first
+pilot that named missing parts instead lost completeness, as the judge scores a
+named gap as missing. The critique checks those parts as well as what the question asks, so a
+missing part sends the answer back for a re-plan and a rewrite. The critic-edits
+critique is not changed. Without the template, the critique's checklists held
+follow-up in 0 of 80 and OAR constraints in 14 of 80, the two parts the judge
+most often found missing.
+
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
 attending plan separate for review. Later, development attending plans may be
