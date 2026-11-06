@@ -234,7 +234,9 @@ def main(argv=None):
         config.aws.knowledge_base_enabled = not args.no_trial_papers
         # Log all settings, including the opt-in judge difference from the web app.
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
-        changes = subprocess.run(["git", "status", "--porcelain"], cwd=REPO, capture_output=True, text=True)
+        # ⚠️ Tracked files only: untracked notes and drawings outside the code marked every run dirty
+        changes = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO,
+                                 capture_output=True, text=True)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
         output = named or ROOT / "outputs" / ("baseline_" + run_id)
         output.mkdir(parents=True, exist_ok=False)
