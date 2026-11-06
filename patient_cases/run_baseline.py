@@ -259,6 +259,12 @@ def main(argv=None):
                 with (output / "results.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(result, ensure_ascii=False, default=json_value) + "\n")
                 statuses.append(result["status"])
+                # ⚠️ A model that rejects temperature drops it on its first call, so the manifest is corrected to
+                # what was sent (null) instead of keeping the configured 0.0
+                sent = engine.llm.sampling_sent
+                if any(manifest["config"]["llm"][key] != value for key, value in sent.items()):
+                    manifest["config"]["llm"].update(sent)
+                    (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
                 print(f"{item['case_id']}: {result['status']}", flush=True)
         except Exception as exc:
             (output / "startup_error.json").write_text(json.dumps({"type": type(exc).__name__, "error": str(exc)}), encoding="utf-8")

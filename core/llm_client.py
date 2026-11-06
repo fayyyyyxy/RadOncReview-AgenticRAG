@@ -44,6 +44,11 @@ class BedrockLLMClient(BaseLLMClient):
         # Sent through Converse until a model rejects them
         self._sampling = {"temperature": llm_config.temperature, "topP": llm_config.top_p}
 
+    @property
+    def sampling_sent(self) -> Dict[str, Optional[float]]:
+        """The temperature and top_p now sent, None once the model has rejected them; a run records this, not config."""
+        return {"temperature": self._sampling.get("temperature"), "top_p": self._sampling.get("topP")}
+
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Generate a response using LLM on Bedrock."""
         model_id = self.config.model_id
@@ -133,6 +138,8 @@ class BedrockLLMClient(BaseLLMClient):
             if not self._sampling or not re.search(r"temperature|top_?p", str(exc), re.IGNORECASE):
                 raise
             self._sampling = {}
+            # ⚠️ Said out loud: the run's config still says temperature 0.0, but from here on none is sent
+            print(f"{self.config.model_id} rejected temperature/top_p; sending neither from now on")
             request["inferenceConfig"] = {"maxTokens": self.config.converse_max_tokens}
             response = self.client.converse(**request)
         if response.get("stopReason") == "max_tokens":
