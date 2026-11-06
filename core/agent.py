@@ -20,7 +20,7 @@ from .synthesizer import ResponseSynthesizer, SelfCritic
 from .citation_check import CitationChecker, cited
 from .critic_edits import GAP_LIMIT, GapFiller, apply_edits
 from .guardrails import GuardrailManager
-from .case_labels import CaseLabels
+from .case_labels import NOT_SPECIFIED, CaseLabels
 from .site_routing import EvidenceScope, scope_for, table_fingerprint
 from .institutional_examples import CaseContext, LocalInstitutionalExamples
 
@@ -165,7 +165,8 @@ class AgenticRAGEngine:
         return final_chunks
 
     # !!!! NEW METHOD FOR COMPARISON/COMPLEX QUERIES !!!!
-    def _collect_multi_topic_chunks(self, plan: TaskPlan, exclude: Optional[set] = None) -> Dict[str, List[Dict]]:
+    def _collect_multi_topic_chunks(self, plan: TaskPlan, exclude: Optional[set] = None,
+                                    site: Optional[str] = None) -> Dict[str, List[Dict]]:
         """
         Collect chunks for comparison/complex queries with balanced per-topic reranking.
 
@@ -232,8 +233,11 @@ class AgenticRAGEngine:
                 ))
 
             # Rank every candidate for this topic (FAISS + KB combined); the cut to top k comes after the repeats
+            # ⚠️ Against the whole vignette, the reranker scored resemblance to the case story: on-site against
+            # off-site AUC 0.54 over run3's sent passages, 0.75 with the site instead. A re-planned topic usually has
+            # no label, so under the site it ranks on the site alone, as it was measured
             reranked = self.retriever.rerank(
-                f"{plan.original_query} {label}",
+                f"{site} {label}".strip() if site else f"{plan.original_query} {label}",
                 chunk_objects,
                 top_k=len(chunk_objects)
             )
@@ -429,6 +433,8 @@ class AgenticRAGEngine:
         # ========== Step 4: Execute Retrieval Tasks ==========
         labels = labels or CaseLabels()
         scope = scope_for(labels.disease_site) if self.config.features.site_filter else EvidenceScope()
+        rerank_site = (labels.disease_site if self.config.features.rerank_site_query
+                       and labels.disease_site != NOT_SPECIFIED else None)
         if scope != EvidenceScope():
             self._log_reasoning("ROUTE", f"Evidence limited to {labels.disease_site}")
         self._log_reasoning("RETRIEVE", "Executing retrieval tasks")
@@ -442,7 +448,7 @@ class AgenticRAGEngine:
 
         # Collect chunks differently based on query type
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-            chunks_by_topic = self._collect_multi_topic_chunks(plan)
+            chunks_by_topic = self._collect_multi_topic_chunks(plan, site=rerank_site)
             total_chunks = sum(len(chunks) for chunks in chunks_by_topic.values())
             self._log_reasoning("RETRIEVE",
                 f"Collected {total_chunks} chunks across {len(chunks_by_topic)} topics "
@@ -558,7 +564,7 @@ class AgenticRAGEngine:
                 if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
                     if improved_plan is not None:
                         chunks_by_topic = self._merge_topics(
-                            chunks_by_topic, self._collect_multi_topic_chunks(improved_plan)
+                            chunks_by_topic, self._collect_multi_topic_chunks(improved_plan, site=rerank_site)
                         )
                     options = writer_options(sum(len(chunks) for chunks in chunks_by_topic.values()))
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(

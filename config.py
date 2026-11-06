@@ -125,6 +125,9 @@ class FeatureConfig:
     # A model ID for the self-critique alone, so the answer is checked by a model other than the one that wrote it;
     # None keeps the shared client
     critic_model: Optional[str] = None
+    # Rank each topic's candidates against the selected disease site and the topic's label, not the whole vignette
+    # and the label (docs/rag_improvement_plan_v2.md, E2 option (b)); with no site selected the vignette is kept
+    rerank_site_query: bool = False
     past_case_index_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/past_case_index")
     past_case_source_sha256: Optional[str] = None
 

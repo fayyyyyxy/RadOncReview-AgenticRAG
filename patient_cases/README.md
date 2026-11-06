@@ -222,6 +222,16 @@ us.openai.gpt-5.6-sol; the manifest records what that model was sent under
 critic_sampling_sent. metadata.critic_edits also lists the gaps, the new passage
 numbers, the fill and the second pass.
 
+### Rerank query
+
+--rerank-site-query sets features.rerank_site_query. Each topic's passages are
+then ranked against the case's disease site and the topic label, for example
+"Gastrointestinal boost dose", instead of the whole vignette and the label. The
+site comes from the case labels (the workbook here, the user's selection in the
+web app); with no site selected the vignette is kept. A re-planned topic usually
+has no label, so it ranks on the site alone. On run3's 1,014 sent passages the
+on-site against off-site AUC is 0.75, against 0.54 with the vignette.
+
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
 attending plan separate for review. Later, development attending plans may be
