@@ -171,6 +171,10 @@ def main(argv=None):
     parser.add_argument("--repair-batch", action="store_true",
                         help="Turn on the whole repair batch: no re-plan, the critic accepts a named gap, and the "
                              "citation check only flags (docs/rag_improvement_plan_v2.md, Part 1).")
+    parser.add_argument("--no-replan", action="store_true",
+                        help="After a critique, rewrite from the first round's passages without searching again.")
+    parser.add_argument("--citation-flag-only", action="store_true",
+                        help="Keep the citations the check rejects in the answer and only list them in its report.")
     args = parser.parse_args(argv)
     try:
         for flag, value in (("--name", args.name), ("--replay-plans", args.replay_plans)):
@@ -193,7 +197,8 @@ def main(argv=None):
                 "mode": "dry_run", "aws_calls": 0, "model": args.model, "site_filter": args.site_filter,
                 "trial_papers": not args.no_trial_papers, "citation_check": not args.no_citation_check,
                 "institutional_examples": args.institutional_examples, "replayed_plans": args.replay_plans,
-                "repair_batch": args.repair_batch,
+                "repair_batch": args.repair_batch, "replan": not (args.no_replan or args.repair_batch),
+                "citation_flag_only": args.citation_flag_only or args.repair_batch,
                 "example_index_validation": "not_performed_in_dry_run" if args.institutional_examples else "not_requested",
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
@@ -212,6 +217,8 @@ def main(argv=None):
         config.features.site_filter = args.site_filter
         config.features.citation_check = not args.no_citation_check
         config.features.institutional_examples = args.institutional_examples
+        config.features.replan = not args.no_replan
+        config.features.citation_flag_only = args.citation_flag_only
         if args.repair_batch:
             # 💡 One flag for the batch, so a run never carries half of it
             config.features.replan = False

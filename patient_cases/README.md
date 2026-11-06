@@ -193,6 +193,10 @@ to the old behavior. The manifest records repair_batch and the switches. Every
 run also keeps the draft the critique judged (metadata.first_draft) next to
 the critique itself (self_critique).
 
+The batch was not kept: with the named gap the critique marked every item
+addressed, and completeness fell. --no-replan and --citation-flag-only turn on
+the other two switches on their own, for runs without the named gap.
+
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
 attending plan separate for review. Later, development attending plans may be
