@@ -247,6 +247,8 @@ function judgeFindings(c) {
       if (!failing.has(k)) failing.set(k, []);
       if (!failing.get(k).includes(i + 1)) failing.get(k).push(i + 1);
     });
+    // Shown as "From model knowledge": statements the judge took as correct but did not find in the passages.
+    // ⚠️ The judge's key keeps its name; renaming it would change the judge prompt and its fingerprint
     (run.unsupported_claims || []).forEach((t) => {
       const k = String(t).trim().toLowerCase();
       if (!k) return;
@@ -385,7 +387,7 @@ function renderAnswer(container, raw, findings) {
     if (cl) {
       const mk = el('mark', 'claim');
       mk.appendChild(node);
-      mk.title = 'Unsupported claim ' + (cl[2] + 1) + ' (judge)';
+      mk.title = 'From model knowledge, item ' + (cl[2] + 1) + ' (judge)';
       mk.addEventListener('click', (e) => { e.stopPropagation(); reveal($('claimref-' + cl[2])); });
       if (!anchored.has(cl[2])) { mk.id = 'claim-' + cl[2]; anchored.add(cl[2]); findings.claims[cl[2]].anchor = mk.id; }
       node = mk;
@@ -394,7 +396,7 @@ function renderAnswer(container, raw, findings) {
     if (ap) {
       const sp = el('span', 'claim-approx');
       sp.appendChild(node);
-      sp.title = 'Approximate place of unsupported claim ' + ap[2].map((i) => i + 1).join(', ')
+      sp.title = 'Approximate place of model-knowledge item ' + ap[2].map((i) => i + 1).join(', ')
         + ' (the judge reworded it)';
       sp.addEventListener('click', () => reveal($('claimref-' + ap[2][0])));
       // One id per range, on its first segment; every claim in the range jumps there
@@ -430,7 +432,7 @@ function renderResult(c, findings) {
   a.appendChild(el('div', 'small muted', 'Model confidence ' + fmt(c.confidence) + ' · ' + fmt(c.elapsed, 1) + ' s'));
   const legend = el('div', 'legend small muted');
   legend.appendChild(el('mark', 'claim', 'highlight'));
-  legend.appendChild(document.createTextNode(' unsupported claim (judge) · '));
+  legend.appendChild(document.createTextNode(' from model knowledge, not in the passages (judge) · '));
   legend.appendChild(el('span', 'claim-approx', 'dashed'));
   legend.appendChild(document.createTextNode(' its approximate place when the judge reworded it · '));
   legend.appendChild(el('span', 'cite fail', '[n]'));
@@ -564,7 +566,7 @@ function renderScore(c, findings) {
   table.appendChild(tbody);
   rt.appendChild(table);
 
-  const cs = section(pane, 'Unsupported claims (' + findings.claims.length + ')', false);
+  const cs = section(pane, 'From model knowledge (' + findings.claims.length + ')', false);
   if (!findings.claims.length) cs.appendChild(el('p', 'small muted', 'None listed by the judge.'));
   const ol = el('ol', 'claims');
   findings.claims.forEach((cl, ci) => {
