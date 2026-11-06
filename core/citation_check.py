@@ -54,9 +54,15 @@ def _sentence_start(answer: str, position: int) -> int:
 def sentence_of(answer: str, start: int, end: int) -> str:
     """The sentence a citation at answer[start:end] belongs to."""
     left = _sentence_start(answer, start)
+    after_stop = False
     # A citation written after the full stop ("... events. [2]") belongs to the sentence it follows
     while left > 0 and not GROUP.sub("", answer[left:start]).strip():
         left = _sentence_start(answer, left - 1)
+        after_stop = True
+    if after_stop:
+        # ⚠️ ...and ends with it. Searching on for the next stop took in the sentence after it on the same line, so
+        # "... cancer. [5] The guideline ..." was checked against [5] and a correct citation was removed
+        return answer[left:end].strip()
     stop = SENTENCE_END.search(answer, end)
     return answer[left:stop.end() if stop else len(answer)].strip()
 
