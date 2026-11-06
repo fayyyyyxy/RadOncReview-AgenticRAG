@@ -71,6 +71,45 @@ def labels_for(case_ids, workbook):
     }
 
 
+# The engine's trace line giving the size and reasoning of the first-round plan (written in core/agent.py)
+PLAN_LINE = re.compile(r"\] PLAN: Created (\d+) sub-tasks: (.*)", re.S)
+
+
+def saved_plans(run_name, selected):
+    """Each selected case's first-round plan from a saved run: its analysis and the sub-tasks searched first."""
+    from core.models import QueryAnalysis, QueryIntent, RetrievalStrategy, SubTask, TaskPlan
+    path = ROOT / "outputs" / f"{run_name}_answers" / "results.jsonl"
+    if not path.exists():
+        raise ValueError(f"No saved run {path.parent.name} to replay plans from.")
+    records = {r["case_id"]: r for r in map(json.loads, path.read_text(encoding="utf-8").splitlines())}
+    plans = {}
+    for item in selected:
+        record = records.get(item["case_id"], {})
+        response = record.get("response") or {}
+        saved = response.get("task_plan")
+        if not saved:
+            raise ValueError(f"{path.parent.name} has no plan for {item['case_id']}.")
+        if record["query"] != make_query(item):
+            raise ValueError(f"{path.parent.name} asked about different input text for {item['case_id']}.")
+        # ⚠️ Saved sub-tasks hold the first round and any re-plan together. Only the first round is replayed:
+        # a re-plan answers that run's own draft, so it is made again for the new draft
+        found = [m for line in response["reasoning_trace"] for m in [PLAN_LINE.search(line)] if m]
+        if len(found) != 1:
+            raise ValueError(f"Cannot tell the first-round plan of {item['case_id']} in {path.parent.name}.")
+        size, reasoning = int(found[0].group(1)), found[0].group(2)
+        plans[item["case_id"]] = TaskPlan(
+            # ⚠️ Not the saved reasoning: a re-plan overwrites it (35 of 40 cases in gpt56terra-run3), and the
+            # re-plan prompt shows it, so a replay would hand the new re-plan the old run's second thoughts
+            plan_id=saved["plan_id"], original_query=saved["original_query"], reasoning=reasoning,
+            analysis=QueryAnalysis(**{**saved["analysis"], "intent": QueryIntent(saved["analysis"]["intent"])}),
+            # New task objects, so nothing the saved run retrieved is carried over
+            sub_tasks=[SubTask(task_id=t["task_id"], description=t["description"], query=t["query"],
+                               retrieval_strategy=RetrievalStrategy(t["retrieval_strategy"]), top_k=t["top_k"])
+                       for t in saved["sub_tasks"][:size]],
+        )
+    return plans
+
+
 def json_value(value):
     if is_dataclass(value):
         return asdict(value)
@@ -81,7 +120,7 @@ def json_value(value):
     raise TypeError(f"Unsupported output type: {type(value).__name__}")
 
 
-def run_case(engine, item, max_length, labels=None, case_context=None):
+def run_case(engine, item, max_length, labels=None, case_context=None, plan=None):
     """Save blocked/error cases explicitly; never truncate clinical input."""
     query = make_query(item)
     labels = labels or CaseLabels()
@@ -93,7 +132,8 @@ def run_case(engine, item, max_length, labels=None, case_context=None):
     try:
         engine.reset_conversation()
         with redirect_stdout(log), redirect_stderr(log):
-            response = engine.query(query, labels, case_context=case_context) if case_context else engine.query(query, labels)
+            extra = {key: value for key, value in (("case_context", case_context), ("plan", plan)) if value is not None}
+            response = engine.query(query, labels, **extra)
         retrieval = response.metadata.get("retrieval", {})
         status = "response_generated"
         if not retrieval:
@@ -125,10 +165,14 @@ def main(argv=None):
     parser.add_argument("--no-citation-check", action="store_true", help="Skip the citation check, as runs made before it did.")
     parser.add_argument("--institutional-examples", action="store_true", help="Include up to two institutional examples in synthesis.")
     parser.add_argument("--past-case-index", type=Path, help="Existing local past-case index folder (does not build it).")
+    parser.add_argument("--replay-plans", metavar="NAME",
+                        help="Search with the first-round plans saved in outputs/NAME_answers instead of planning anew, "
+                             "so runs compared case by case retrieve the same first-round passages.")
     args = parser.parse_args(argv)
     try:
-        if args.name is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", args.name):
-            raise ValueError("--name may contain only letters, digits, '-' and '_'.")
+        for flag, value in (("--name", args.name), ("--replay-plans", args.replay_plans)):
+            if value is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", value):
+                raise ValueError(f"{flag} may contain only letters, digits, '-' and '_'.")
         # Checked before any paid call, so a clashing name never costs a run
         named = ROOT / "outputs" / f"{args.name}_answers" if args.name else None
         if named is not None and named.exists():
@@ -138,12 +182,14 @@ def main(argv=None):
             raise ValueError(f"--limit must be between 1 and {len(inputs)}.")
         selected = inputs[:args.limit]
         labels = labels_for([r["case_id"] for r in selected], args.workbook)
+        # Read in dry-run mode too, so a missing or mismatched plan shows before a paid run
+        plans = saved_plans(args.replay_plans, selected) if args.replay_plans else {}
         # No engine import, model download or AWS calls in dry-run mode.
         if not args.execute:
             print(json.dumps({
                 "mode": "dry_run", "aws_calls": 0, "model": args.model, "site_filter": args.site_filter,
                 "trial_papers": not args.no_trial_papers, "citation_check": not args.no_citation_check,
-                "institutional_examples": args.institutional_examples,
+                "institutional_examples": args.institutional_examples, "replayed_plans": args.replay_plans,
                 "example_index_validation": "not_performed_in_dry_run" if args.institutional_examples else "not_requested",
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
@@ -191,6 +237,11 @@ def main(argv=None):
             "workbook_sha256": hashlib.sha256(args.workbook.read_bytes()).hexdigest(),
             "case_ids": [r["case_id"] for r in selected], "judge_enabled": args.judge,
             "patient_example_retrieval": args.institutional_examples, "config": asdict(config),
+            "replayed_plans": {
+                "run": args.replay_plans,
+                "results_sha256": hashlib.sha256(
+                    (ROOT / "outputs" / f"{args.replay_plans}_answers" / "results.jsonl").read_bytes()).hexdigest(),
+            } if args.replay_plans else None,
             "evidence_snapshot": "Existing live AWS resources; not frozen or clinically validated",
         }
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -204,7 +255,7 @@ def main(argv=None):
                 (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             for item in selected:
                 result = run_case(engine, item, config.guardrail.max_input_length, labels[item["case_id"]],
-                                  case_contexts.get(item["case_id"]))
+                                  case_contexts.get(item["case_id"]), plans.get(item["case_id"]))
                 with (output / "results.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(result, ensure_ascii=False, default=json_value) + "\n")
                 statuses.append(result["status"])

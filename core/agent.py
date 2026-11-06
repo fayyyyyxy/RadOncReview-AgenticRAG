@@ -299,7 +299,7 @@ class AgenticRAGEngine:
 
 
     def query(self, user_query: str, labels: Optional[CaseLabels] = None,
-              case_context: Optional[CaseContext] = None) -> AgentResponse:
+              case_context: Optional[CaseContext] = None, plan: Optional[TaskPlan] = None) -> AgentResponse:
         """
         Process a user query through the agentic RAG pipeline.
 
@@ -307,6 +307,7 @@ class AgenticRAGEngine:
             user_query: The user's clinical question.
             labels: Case labels selected by the user; used only when a feature switch asks for them.
             case_context: Exact vignette/question and study linkage, required when examples are enabled.
+            plan: A saved plan to search with instead of analyzing and planning again (evaluation runs only).
 
         Returns:
             AgentResponse with answer, citations, confidence, and reasoning trace.
@@ -339,15 +340,25 @@ class AgenticRAGEngine:
                 raise ValueError("Institutional examples require structured case context matching the query.")
             self.example_provider.validate_context(case_context)
 
+        # A plan made for another query would search for the wrong patient; checked before any paid call
+        if plan is not None and plan.original_query != processed_query:
+            raise ValueError("A replayed plan must have been made for this query.")
+
         # ========== Step 2: Query Analysis ==========
-        self._log_reasoning("ANALYZE", "Analyzing query intent and entities")
+        if plan is not None:
+            # 💡 The plan carries the analysis it was made from, so a replay also takes the same single- or
+            # multi-topic path and gives the writer and self-critique the same intent and disease
+            analysis = plan.analysis
+            self._log_reasoning("ANALYZE", "Using the analysis of a replayed plan")
+        else:
+            self._log_reasoning("ANALYZE", "Analyzing query intent and entities")
 
-        # Use LLM-enhanced analysis for complex queries, rule-based for simple one
-        analysis = self.query_analyzer.analyze(processed_query)
+            # Use LLM-enhanced analysis for complex queries, rule-based for simple one
+            analysis = self.query_analyzer.analyze(processed_query)
 
-        if analysis.is_complex or analysis.confidence < 0.7:
-            self._log_reasoning("ANALYZE", "Using LLM for deeper analysis")
-            analysis = self.query_analyzer.analyze_with_llm(processed_query)
+            if analysis.is_complex or analysis.confidence < 0.7:
+                self._log_reasoning("ANALYZE", "Using LLM for deeper analysis")
+                analysis = self.query_analyzer.analyze_with_llm(processed_query)
 
         self._log_reasoning("ANALYZE",
             f"Intent: {analysis.intent.value}, "
@@ -357,9 +368,14 @@ class AgenticRAGEngine:
         )
 
         # ========== Step 3: Task Planning ==========
-        self._log_reasoning("PLAN", "Creating execution plan")
-        plan = self.task_planner.plan(analysis)
+        if plan is None:
+            self._log_reasoning("PLAN", "Creating execution plan")
+            plan = self.task_planner.plan(analysis)
+        else:
+            self._log_reasoning("PLAN", "Replaying a saved plan")
 
+        # ⚠️ The runner reads the first round's size and reasoning from this line when it replays a run, so keep its
+        # wording; the plan's own reasoning is overwritten by a re-plan
         self._log_reasoning("PLAN",
             f"Created {len(plan.sub_tasks)} sub-tasks: {plan.reasoning}"
         )

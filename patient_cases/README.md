@@ -159,6 +159,27 @@ unchanged and the error is recorded.
 The answer as written is kept in the report (answer_before), so a change to
 the check can be replayed on the same text instead of a new run.
 
+### Replaying plans
+
+```bash
+python patient_cases/run_baseline.py --inputs patient_cases/data/processed/evaluation_inputs.jsonl \
+    --limit 40 --execute --name heading-test --replay-plans gpt56terra-run3
+```
+
+The planner writes different search queries from run to run even at
+temperature zero (33 of 40 cases between two Llama 3.3 runs), so about half
+the passages differ and a small change is lost in that noise.
+--replay-plans NAME skips the query analyzer and planner and searches with the
+first-round plan saved in outputs/NAME_answers: its analysis and sub-task
+queries, read from the saved task plan up to the size in the "PLAN: Created
+N sub-tasks" log line, and the planner's reasoning from that same line (a
+re-plan overwrites the saved one, and the next re-plan would read it). The
+re-plan after self-critique still runs, since it answers the new draft. Any saved run can be the source, and a replayed run can
+be replayed in turn. Each case's saved input text must match, or the runner
+stops before any paid call; the dry run checks this too. The manifest records
+the source run and the hash of its results. Compare runs that replay the same
+source case by case, for example McNemar's test on hallucination.
+
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
 attending plan separate for review. Later, development attending plans may be
