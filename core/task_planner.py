@@ -226,7 +226,11 @@ Respond in the same JSON format as before."""
                 new_sub_tasks = []
 
                 for task in result["sub_tasks"]:
-                    subtopic_query = task.get("query", "")
+                    subtopic_query = task.get("query") or ""
+                    # ⚠️ A blank query fails the Knowledge Base search ("Query text must not be blank") and leaves the
+                    # answer's retrieval incomplete; the re-plan wrote one in 3 saved answers (OLI-002, SAR-012, GI-019)
+                    if not subtopic_query.strip():
+                        continue
                     # ── Same pattern: each replanned subtopic → DENSE + KB ──
                     new_sub_tasks.append(SubTask(
                         task_id=self._create_task_id(),
