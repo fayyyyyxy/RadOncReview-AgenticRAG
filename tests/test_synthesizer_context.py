@@ -45,6 +45,23 @@ class SynthesizerContextTests(unittest.TestCase):
         self.assertEqual(passages[4]["topic"], "Topic B")
         self.assertEqual(citations[0].chunk_text, passages[4]["text"])
 
+    def test_multi_topic_headings_hide_search_text(self):
+        # Topics as the planner writes them: a guessed dose and a patient fact the case may not state
+        topics = {"cervix brachytherapy after 45 Gy 25 fractions": [chunk("Brachytherapy passage")],
+                  "clinically N0 elective neck": [],
+                  "weekly cisplatin 40 mg/m2": [chunk("Cisplatin passage")]}
+        synth, llm = self.synthesizer("Synthetic fact [2].")
+        _, _, _, passages = synth.synthesize_multi_topic("Synthetic question", self.analysis, topics)
+
+        for text in (*topics, "45 Gy", "N0", "40 mg"):
+            self.assertNotIn(text, llm.prompt)
+        # The empty topic gets no heading, so the groups that have passages are numbered 1 and 2
+        self.assertIn("### Evidence group 1 ###\n[1] Source:", llm.prompt)
+        self.assertIn("### Evidence group 2 ###\n[2] Source:", llm.prompt)
+        self.assertNotIn("Evidence group 3", llm.prompt)
+        self.assertEqual([(p["topic"], p["group"]) for p in passages],
+                         [("cervix brachytherapy after 45 Gy 25 fractions", 1), ("weekly cisplatin 40 mg/m2", 2)])
+
     def test_passages_keep_full_text(self):
         long_text = "x" * 800
         synth, _ = self.synthesizer("Synthetic fact [1].")

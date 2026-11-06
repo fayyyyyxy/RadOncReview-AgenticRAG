@@ -229,13 +229,15 @@ def clinical_prompt(case, rubric):
 
 
 def grounding_prompt(case, rubric):
-    parts, topic = [], None
+    parts, heading = [], None
     for p in case["passages"]:
-        # Same topic headers and [n] labels as the synthesizer prompt
-        if p.get("topic") != topic:
-            topic = p.get("topic")
-            if topic:
-                parts.append(f"### {topic} ###")
+        # Same headings and [n] labels as the synthesizer prompt. Runs saved before passages had a group number
+        # showed the writer the planner's search text, so those keep it
+        current = f"Evidence group {p['group']}" if "group" in p else p.get("topic")
+        if current != heading:
+            heading = current
+            if heading:
+                parts.append(f"### {heading} ###")
         parts.append(f"[{p['citation_id']}] Source: {p['source_path']}\n{p['text']}")
     return GROUNDING_PROMPT.substitute(
         vignette=case["vignette"], question=case["question"], passages="\n\n".join(parts),

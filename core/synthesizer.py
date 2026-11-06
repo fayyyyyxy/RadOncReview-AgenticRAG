@@ -216,7 +216,9 @@ Answer:"""
         all_passages = []
         citation_counter = 1
 
-        for topic, chunks in chunks_by_topic.items():
+        # A topic whose search found nothing gets no heading: an empty group tells the writer nothing
+        topics = [(topic, chunks) for topic, chunks in chunks_by_topic.items() if chunks]
+        for group, (topic, chunks) in enumerate(topics, start=1):
             # ⚠️ Number while formatting. Renumbering Citation objects afterwards left every
             # topic's text labelled [1]..[k], so a cited [2] could point at the wrong topic.
             topic_context, topic_citations, topic_passages = self._format_context(
@@ -224,9 +226,12 @@ Answer:"""
             )
             citation_counter += len(topic_citations)
 
-            context_parts.append(f"### {topic} ###\n{topic_context}")
+            # ⚠️ The heading numbers the group and never shows the topic. The topic is the planner's search text,
+            # which can hold a guessed dose or patient fact ("45 Gy 25 fractions", "clinically N0"), and the writer
+            # read a heading as evidence. Evaluators still get the topic on each passage
+            context_parts.append(f"### Evidence group {group} ###\n{topic_context}")
             all_citations.extend(topic_citations)
-            all_passages.extend({**p, "topic": topic} for p in topic_passages)
+            all_passages.extend({**p, "topic": topic, "group": group} for p in topic_passages)
 
         full_context = "\n\n".join(context_parts)
         revision = self._revision_request(feedback, draft)
