@@ -81,7 +81,9 @@ class InputGuardrail:
 
         # Check for blocked terms
         for term in self.config.blocked_terms:
-            if term.lower() in text.lower():
+            # ⚠️ Whole words only: as substrings, "DOB" matched "endobronchial" and "MRN" matched "mRNA", and the
+            # question was blocked whole
+            if re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE):
                 violations.append(GuardrailViolation.BLOCKED_CONTENT)
                 warnings.append(f"Blocked term detected: {term}")
 
