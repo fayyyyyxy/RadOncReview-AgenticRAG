@@ -180,6 +180,19 @@ stops before any paid call; the dry run checks this too. The manifest records
 the source run and the hash of its results. Compare runs that replay the same
 source case by case, for example McNemar's test on hallucination.
 
+### Repair batch
+
+--repair-batch turns on three switches together, so a run never carries half
+of the batch (docs/rag_improvement_plan_v2.md, Part 1): no re-plan after
+self-critique, so the rewrite works from the first round's passages with the
+feedback and its draft (features.replan); the critique counts "the provided
+evidence does not cover it" as addressed (features.critic_named_gap); and the
+citation check leaves rejected citations in the answer and lists them under
+"rejected" in its report (features.citation_flag_only). Each switch defaults
+to the old behavior. The manifest records repair_batch and the switches. Every
+run also keeps the draft the critique judged (metadata.first_draft) next to
+the critique itself (self_critique).
+
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
 attending plan separate for review. Later, development attending plans may be

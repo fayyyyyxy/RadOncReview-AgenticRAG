@@ -114,6 +114,10 @@ class FeatureConfig:
     site_filter: bool = False  # limit evidence to the user-selected disease site (core/site_routing.py)
     citation_check: bool = True  # check each citation against its passage after writing (core/citation_check.py)
     institutional_examples: bool = False
+    # The Part 1 repair batch (docs/rag_improvement_plan_v2.md); run_baseline --repair-batch turns all three over
+    replan: bool = True  # after a critique, search again with a re-plan; False rewrites from the first round's passages
+    critic_named_gap: bool = False  # the critique counts "the provided evidence does not cover it" as addressed
+    citation_flag_only: bool = False  # rejected citations stay in the answer and are only listed in the report
     past_case_index_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/past_case_index")
     past_case_source_sha256: Optional[str] = None
 

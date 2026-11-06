@@ -79,7 +79,7 @@ class AgenticRAGEngine:
             )
 
         self.synthesizer = ResponseSynthesizer(self.llm, self.config)
-        self.self_critic = SelfCritic(self.llm, self.config.agent)
+        self.self_critic = SelfCritic(self.llm, self.config.agent, named_gap=self.config.features.critic_named_gap)
         self.citation_checker = CitationChecker(self.llm)
         self.guardrails = GuardrailManager(self.config.guardrail)
 
@@ -452,6 +452,8 @@ class AgenticRAGEngine:
         critique = None
         if self.config.agent.enable_self_critique:
             self._log_reasoning("CRITIQUE", "Performing self-evaluation")
+            # Kept with the critique, so why an answer was rewritten can be read against the text that was judged
+            first_draft = answer
             critique = self.self_critic.critique(processed_query, answer, analysis)
 
             self._log_reasoning("CRITIQUE",
@@ -467,14 +469,21 @@ class AgenticRAGEngine:
                 # Get improvement guidance
                 guidance = self.self_critic.get_improvement_guidance(critique)
 
-                # Replan with feedback
-                improved_plan = self.task_planner.replan(plan, guidance)
+                improved_plan = None
+                if self.config.features.replan:
+                    # Replan with feedback
+                    improved_plan = self.task_planner.replan(plan, guidance)
 
-                # Re-execute new tasks
-                for task in improved_plan.sub_tasks:
-                    if task.status == TaskStatus.PENDING:
-                        # ⚠️ The retry must keep the scope, or re-planned tasks would reach other sites
-                        self.retriever.execute_task(task, scope)
+                    # Re-execute new tasks
+                    for task in improved_plan.sub_tasks:
+                        if task.status == TaskStatus.PENDING:
+                            # ⚠️ The retry must keep the scope, or re-planned tasks would reach other sites
+                            self.retriever.execute_task(task, scope)
+                else:
+                    # ⚠️ Re-plan passages carried 6 of 11 judged table and attribution errors and added 8-20 searches
+                    # per case; without them the rewrite works from the first round's passages, the feedback and
+                    # its own draft
+                    self._log_reasoning("CRITIQUE", "Rewriting from the first round's passages (re-plan off)")
 
                 # Re-synthesize — use same path as first attempt based on query type
                 # ⚠️ The new passages are added to the first round's, not swapped in, so a rewrite asked to fill a
@@ -482,24 +491,27 @@ class AgenticRAGEngine:
                 # reranker scores against the question, not the gap, so the first round's passages would win again.
                 # The writer also gets the feedback and its draft; before, only the search planner saw the feedback
                 if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-                    chunks_by_topic = self._merge_topics(
-                        chunks_by_topic, self._collect_multi_topic_chunks(improved_plan)
-                    )
+                    if improved_plan is not None:
+                        chunks_by_topic = self._merge_topics(
+                            chunks_by_topic, self._collect_multi_topic_chunks(improved_plan)
+                        )
                     options = writer_options(sum(len(chunks) for chunks in chunks_by_topic.values()))
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
                         processed_query, analysis, chunks_by_topic, feedback=guidance, draft=answer, **options
                     )
                 else:
-                    all_chunks = self._merge_chunks(all_chunks, self._collect_all_chunks(improved_plan))
+                    if improved_plan is not None:
+                        all_chunks = self._merge_chunks(all_chunks, self._collect_all_chunks(improved_plan))
                     options = writer_options(len(all_chunks))
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize(
-                        processed_query, analysis, improved_plan, all_chunks, feedback=guidance, draft=answer, **options
+                        processed_query, analysis, improved_plan or plan, all_chunks, feedback=guidance, draft=answer,
+                        **options
                     )
 
                 # Update confidence with critique score
                 confidence = (confidence + critique.confidence_score) / 2
                 # The recorded plan lists every search the answer drew on; a failed replan returns the plan unchanged
-                if improved_plan is not plan:
+                if improved_plan is not None and improved_plan is not plan:
                     plan = replace(improved_plan, sub_tasks=plan.sub_tasks + improved_plan.sub_tasks)
 
         # ========== Step 6b: Citation Check ==========
@@ -508,14 +520,20 @@ class AgenticRAGEngine:
         if self.config.features.citation_check:
             self._log_reasoning("CHECK", "Checking each citation against its passage")
             answer_before = answer
-            answer, citation_check = self.citation_checker.check(answer, context_passages)
+            checked, citation_check = self.citation_checker.check(answer, context_passages)
             # 💡 Kept so that a change to the check can be replayed on the same answer instead of a new run
             citation_check["answer_before"] = answer_before
-            # Only citations still in the answer stay in the source list
-            remaining = cited(answer)
-            citations = [c for c in citations if c.citation_id in remaining]
+            # ⚠️ In a sample of 50 removals, 16 were wrong and 29 were sentences the passage only partly supports
+            # (docs/rag_improvement_plan_v2.md, 0.3); flag-only leaves the answer as written and lists them instead
+            citation_check["flag_only"] = self.config.features.citation_flag_only
+            if not citation_check["flag_only"]:
+                answer = checked
+                # Only citations still in the answer stay in the source list
+                remaining = cited(answer)
+                citations = [c for c in citations if c.citation_id in remaining]
             self._log_reasoning("CHECK",
-                f"Removed {citation_check['removed']} of {citation_check['citations']} citations, "
+                f"{'Flagged' if citation_check['flag_only'] else 'Removed'} "
+                f"{citation_check['removed']} of {citation_check['citations']} citations, "
                 f"{citation_check['unchecked']} unchecked"
                 + (f", check failed: {citation_check['error']}" if citation_check["error"] else "")
             )
@@ -579,6 +597,8 @@ class AgenticRAGEngine:
         )
         if citation_check is not None:
             response.metadata["citation_check"] = citation_check
+        if critique is not None:
+            response.metadata["first_draft"] = first_draft
 
         # ========== Step 8: LLM Judge Evaluation ==========
         if self.enable_judge:

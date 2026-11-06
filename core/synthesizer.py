@@ -283,9 +283,19 @@ class SelfCritic:
     CRITIQUE_PROMPT = """You are a radiation oncology expert reviewer.
 Evaluate the following answer for completeness and safety."""
 
-    def __init__(self, llm_client: BaseLLMClient, config: Config):
+    ADDRESSED_RULE = ("Mark an item addressed only if the answer gives a specific recommendation for this patient. "
+                      "Saying that the sources do not cover it, giving general background, or answering for another "
+                      "condition or setting does not count.")
+    # ⚠️ Under the rule above, an answer that says plainly what the evidence lacks goes back for a rewrite that has
+    # nothing new to say; with the critic_named_gap switch a named gap counts as addressed
+    NAMED_GAP_RULE = ("Mark an item addressed if the answer gives a specific recommendation for this patient, or if it "
+                      "says the provided evidence does not cover the item. General background, or an answer for "
+                      "another condition or setting, does not count.")
+
+    def __init__(self, llm_client: BaseLLMClient, config: Config, named_gap: bool = False):
         self.llm = llm_client
         self.config = config
+        self.addressed_rule = self.NAMED_GAP_RULE if named_gap else self.ADDRESSED_RULE
 
     def critique(
         self,
@@ -309,8 +319,7 @@ Answer:
 
 1. List each thing the question explicitly asks for, in the question's own words. Do not add anything the question \
 does not ask about. Leave out requests to cite sources; citations are checked separately.
-2. Mark an item addressed only if the answer gives a specific recommendation for this patient. Saying that the \
-sources do not cover it, giving general background, or answering for another condition or setting does not count.
+2. {self.addressed_rule}
 3. Note any recommendation that could harm this patient if followed.
 
 Respond in JSON format:

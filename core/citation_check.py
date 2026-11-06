@@ -91,7 +91,7 @@ class CitationChecker:
                 if n in text and (sentence, n) not in items:
                     items[(sentence, n)] = len(items) + 1
         report = {"citations": sum(len(numbers(g.group(2))) for g in groups), "items": len(items),
-                  "unchecked": 0, "removed": 0, "attempts": 0, "error": None, "uncited_sentences": []}
+                  "unchecked": 0, "removed": 0, "attempts": 0, "error": None, "uncited_sentences": [], "rejected": []}
         verdicts, report["error"], report["attempts"] = self._ask(items, text) if items else ({}, None, 0)
         if report["error"]:
             # ⚠️ Fail open: a failed check must not delete citations, so the answer is returned unchanged
@@ -106,6 +106,8 @@ class CitationChecker:
             # Kept unless rejected: an item the LLM did not answer stays cited (fail open again)
             kept = [n for n in listed if n in text and verdicts.get(items[(sentence, n)]) is not False]
             report["removed"] += len(listed) - len(kept)
+            # Listed one by one, so a run that keeps rejected citations in the answer can still show which they are
+            report["rejected"] += [{"sentence": sentence, "citation": n} for n in listed if n not in kept]
             # Kept numbers are written one per bracket: "[4], [5]" or "[4, 5]" becomes "[4] [5]".
             # ⚠️ An emptied group drops its leading space too, or "tolerated [2]." would become "tolerated ."
             replacement = (group.group(1) + " ".join(f"[{n}]" for n in kept)) if kept else ""

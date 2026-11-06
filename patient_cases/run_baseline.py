@@ -168,6 +168,9 @@ def main(argv=None):
     parser.add_argument("--replay-plans", metavar="NAME",
                         help="Search with the first-round plans saved in outputs/NAME_answers instead of planning anew, "
                              "so runs compared case by case retrieve the same first-round passages.")
+    parser.add_argument("--repair-batch", action="store_true",
+                        help="Turn on the whole repair batch: no re-plan, the critic accepts a named gap, and the "
+                             "citation check only flags (docs/rag_improvement_plan_v2.md, Part 1).")
     args = parser.parse_args(argv)
     try:
         for flag, value in (("--name", args.name), ("--replay-plans", args.replay_plans)):
@@ -190,6 +193,7 @@ def main(argv=None):
                 "mode": "dry_run", "aws_calls": 0, "model": args.model, "site_filter": args.site_filter,
                 "trial_papers": not args.no_trial_papers, "citation_check": not args.no_citation_check,
                 "institutional_examples": args.institutional_examples, "replayed_plans": args.replay_plans,
+                "repair_batch": args.repair_batch,
                 "example_index_validation": "not_performed_in_dry_run" if args.institutional_examples else "not_requested",
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
@@ -208,6 +212,11 @@ def main(argv=None):
         config.features.site_filter = args.site_filter
         config.features.citation_check = not args.no_citation_check
         config.features.institutional_examples = args.institutional_examples
+        if args.repair_batch:
+            # 💡 One flag for the batch, so a run never carries half of it
+            config.features.replan = False
+            config.features.critic_named_gap = True
+            config.features.citation_flag_only = True
         if args.past_case_index is not None:
             config.features.past_case_index_path = str(args.past_case_index.resolve())
         case_contexts = {}
@@ -236,7 +245,8 @@ def main(argv=None):
             "input_sha256": hashlib.sha256(args.inputs.read_bytes()).hexdigest(),
             "workbook_sha256": hashlib.sha256(args.workbook.read_bytes()).hexdigest(),
             "case_ids": [r["case_id"] for r in selected], "judge_enabled": args.judge,
-            "patient_example_retrieval": args.institutional_examples, "config": asdict(config),
+            "patient_example_retrieval": args.institutional_examples, "repair_batch": args.repair_batch,
+            "config": asdict(config),
             "replayed_plans": {
                 "run": args.replay_plans,
                 "results_sha256": hashlib.sha256(
