@@ -131,6 +131,10 @@ class CritiqueTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
+    def test_the_template_is_on_by_default(self):
+        # The user's decision after the 40-case arm, although its Harm >= 3 bar failed (docs/rag_improvement_plan_v2.md)
+        self.assertTrue(Config().features.completeness_template)
+
     def test_the_switch_reaches_the_writer_and_the_critique(self):
         from core.agent import AgenticRAGEngine
         for value in (False, True):

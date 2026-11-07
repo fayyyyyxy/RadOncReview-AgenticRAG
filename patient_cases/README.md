@@ -234,19 +234,29 @@ on-site against off-site AUC is 0.75, against 0.54 with the vignette.
 
 ### Completeness template
 
---completeness-template sets features.completeness_template. The writer then
-answers under the seven parts of the workbook's Completeness anchor (indication,
+features.completeness_template is on by default; --no-completeness-template
+turns it off (runs before it was the default passed --completeness-template).
+The writer answers under the seven parts of the workbook's Completeness anchor (indication,
 target volumes, dose and fractionation, technique, organ-at-risk constraints,
 systemic therapy, follow-up). For a part no passage covers it gives the usual
 practice, uncited and marked "(not in the provided evidence)"; for a case detail
 the vignette leaves out it states its assumption and answers under it; for a
 part that does not apply it writes "Not applicable" with a reason. A first
 pilot that named missing parts instead lost completeness, as the judge scores a
-named gap as missing. The critique checks those parts as well as what the question asks, so a
-missing part sends the answer back for a re-plan and a rewrite. The critic-edits
-critique is not changed. Without the template, the critique's checklists held
-follow-up in 0 of 80 and OAR constraints in 14 of 80, the two parts the judge
-most often found missing.
+named gap as missing. The critique checks those parts as well as what the
+question asks, so a missing part sends the answer back for a re-plan and a
+rewrite. The critic-edits critique is not changed. Without the template, the
+critique's checklists held follow-up in 0 of 80 and OAR constraints in 14 of
+80, the two parts the judge most often found missing.
+
+On the 40 cases, run twice against the same plans without it, completeness rose
+from 3.48 to 4.30 (37 cases up, none down) with accuracy and adherence
+unchanged, and verifiable citations from 81% to 90%. Statements the passages
+do not hold rose from 3.0 to 5.4 per judging, most of them marked, and answers
+grew about a fifth. One answer reached Harm 3 where the runs without it had
+none: SKN-002 acted on a node-negative status the case does not give. The bar
+set before the run allowed no such answer; the template was made the default
+after that result.
 
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
