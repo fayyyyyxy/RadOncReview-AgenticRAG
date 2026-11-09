@@ -99,22 +99,20 @@ python patient_cases/run_baseline.py --execute --limit 1
 
 This downloads the reranker model if needed, reads existing AWS evidence,
 creates query embeddings, and makes paid LLM calls in the configured account.
-It uses evidence only by default. `--institutional-examples` additionally supplies
-up to two historical institutional examples to the writer, as described below.
-The separate LLM judge is off by default; self-critique remains enabled as
+It uses evidence only. The separate LLM judge is off by default; self-critique remains enabled as
 configured by the existing engine. Add --judge only if its extra model calls
 and calibration requirements are intended. Temperature is set to zero; this
 does not guarantee identical model responses on repeated runs. Every engine LLM
-call uses the web app's model from config.py (Llama 3.3 70B) by default; pass
---model to choose another. Llama, Claude and Titan models keep their own
-request formats; any other Bedrock model (for example us.openai.gpt-5.6-terra)
-goes through the Converse API, without temperature and top_p if it rejects
+call uses the web app's model from config.py (GPT-5.6 Terra, the model of the
+final comparison) by default; pass --model to choose another. Llama, Claude and
+Titan models keep their own request formats; any other Bedrock model, such as
+the default, goes through the Converse API, without temperature and top_p if it rejects
 them, with a token limit of 8192 (converse_max_tokens in config.py) instead of
 Llama's 2048, since a reasoning model's thinking counts toward the limit. A
 reply cut off at the token limit is noted in the case's engine log.
 
 Each run has its own ignored folder, outputs/<name>_answers/ when --name is
-given (for example --name site-filter), otherwise outputs/baseline_<timestamp>_<id>/, with
+given (for example --name p3-final), otherwise outputs/baseline_<timestamp>_<id>/, with
 manifest.json, startup.log, and results.jsonl. Results are appended after
 each case and include answer, citations, retrieved passages/task plan, logs,
 timing and errors. These files contain clinical text and may contain expiring
@@ -135,13 +133,8 @@ development subset. Locked-test evaluation is outside this runner's scope.
 
 ### Citation check
 
-```bash
-python patient_cases/run_baseline.py --execute --no-citation-check
-```
-
 After the answer is written, a citation check (core/citation_check.py) runs in
-the web app and in baseline runs; --no-citation-check skips it, as runs made
-before it did. One more LLM call per answer asks, for each sentence and each
+the web app and in baseline runs. One more LLM call per answer asks, for each sentence and each
 passage it cites, whether the passage states what the sentence says, numbers
 included. A rejected citation is removed and the sentence stays; sentences that
 lost a citation are listed in the response metadata (citation_check), and the
@@ -180,53 +173,22 @@ stops before any paid call; the dry run checks this too. The manifest records
 the source run and the hash of its results. Compare runs that replay the same
 source case by case, for example McNemar's test on hallucination.
 
-### Repair batch
+### Self-critique and rewrite
 
---repair-batch turns on three switches together, so a run never carries half
-of the batch (docs/rag_improvement_plan_v2.md, Part 1): no re-plan after
-self-critique, so the rewrite works from the first round's passages with the
-feedback and its draft (features.replan); the critique counts "the provided
-evidence does not cover it" as addressed (features.critic_named_gap); and the
-citation check leaves rejected citations in the answer and lists them under
-"rejected" in its report (features.citation_flag_only). Each switch defaults
-to the old behavior. The manifest records repair_batch and the switches. Every
-run also keeps the draft the critique judged (metadata.first_draft) next to
-the critique itself (self_critique).
-
-The batch was not kept: with the named gap the critique marked every item
-addressed, and completeness fell. --no-replan and --citation-flag-only turn on
-the other two switches on their own, for runs without the named gap.
-
-### Critic edits
-
---critic-edits sets features.critic_edits. The critique then reads the
-passages along with the draft and returns sentence edits, which code applies,
-so every sentence it does not name stays exactly as written. An edit splits a
-sentence that mixes a passage's fact with inference, cites a number a passage
-states (or else says the evidence does not give it), corrects a citation
-number, adds an item a passage covers that the answer leaves out, or replaces a
-recommendation that would harm the patient. It never adds a caveat or a
-reminder. A named gap counts only if no passage covers the item. Only a wrong
-main recommendation is rewritten, from the first round's passages, without a
-re-plan. metadata.critic_edits lists the edits applied and those whose sentence
-was not found (docs/rag_improvement_plan_v2.md, E4).
-
-The critique also lists, at most three, the items no passage covers, each with
-a search query. Each is searched once in the review notes and once in the trial
-papers, within the first round's scope, keeping up to three passages the answer
-did not already have. The writer's model then writes a sentence for an item
-only if a new passage states it for this patient's condition and setting, and
-the critique reads the answer once more, with edits only. --critic-model runs
-the critique, both passes, on a model of its own, such as
-us.openai.gpt-5.6-sol; the manifest records what that model was sent under
-critic_sampling_sent. metadata.critic_edits also lists the gaps, the new passage
-numbers, the fill and the second pass.
+The self-critique lists what the question asks for and the parts of a plan
+(see Completeness template), and marks each addressed or not; saying that the
+evidence does not cover an item does not count. One missing item, an unsafe
+recommendation or low confidence sends the answer back once: the planner
+re-plans from the feedback, the new passages are added to the first round's,
+and the writer rewrites with the feedback and its draft. Every run keeps the
+draft the critique judged (metadata.first_draft) next to the critique itself
+(self_critique).
 
 ### Rerank query
 
---rerank-site-query sets features.rerank_site_query. Each topic's passages are
-then ranked against the case's disease site and the topic label, for example
-"Gastrointestinal boost dose", instead of the whole vignette and the label. The
+Each topic's passages are ranked against the case's disease site and the topic
+label, for example "Gastrointestinal boost dose", instead of the whole vignette
+and the label (docs/rag_improvement_plan_v2.md, E2 option (b)). The
 site comes from the case labels (the workbook here, the user's selection in the
 web app); with no site selected the vignette is kept. A re-planned topic usually
 has no label, so it ranks on the site alone. On run3's 1,014 sent passages the
@@ -234,8 +196,6 @@ on-site against off-site AUC is 0.75, against 0.54 with the vignette.
 
 ### Completeness template
 
-features.completeness_template is on by default; --no-completeness-template
-turns it off (runs before it was the default passed --completeness-template).
 The writer answers under the seven parts of the workbook's Completeness anchor (indication,
 target volumes, dose and fractionation, technique, organ-at-risk constraints,
 systemic therapy, follow-up). For a part no passage covers it gives the usual
@@ -245,7 +205,7 @@ part that does not apply it writes "Not applicable" with a reason. A first
 pilot that named missing parts instead lost completeness, as the judge scores a
 named gap as missing. The critique checks those parts as well as what the
 question asks, so a missing part sends the answer back for a re-plan and a
-rewrite. The critic-edits critique is not changed. Without the template, the
+rewrite. Without the template, the
 critique's checklists held follow-up in 0 of 80 and OAR constraints in 14 of
 80, the two parts the judge most often found missing.
 
@@ -255,8 +215,20 @@ unchanged, and verifiable citations from 81% to 90%. Statements the passages
 do not hold rose from 3.0 to 5.4 per judging, most of them marked, and answers
 grew about a fifth. One answer reached Harm 3 where the runs without it had
 none: SKN-002 acted on a node-negative status the case does not give. The bar
-set before the run allowed no such answer; the template was made the default
-after that result.
+set before the run allowed no such answer; the template was kept after that
+result.
+
+### Experiments not kept
+
+The switches for experiments that were not kept were removed after the final
+comparison. The tag pre-cleanup-2026-11-08 still has every one of them, and
+docs/rag_improvement_plan_v2.md has their results: --site-filter (evidence
+limited to the selected site), --institutional-examples (up to two past cases
+given to the writer), --repair-batch, --no-replan, --citation-flag-only and the
+critique's named gap (Part 1), --critic-edits and --critic-model (E4), and
+--no-citation-check, --no-trial-papers, --no-completeness-template and the
+vignette as the rerank query. To rerun one of them, or the final, E4 and E1
+arms, check out that tag in a worktree; the base arm ran at f315841.
 
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
@@ -269,62 +241,6 @@ case and other encounters belonging to the same patient. Patient ID is for
 this grouping check, not a clinical similarity feature or model input. Other
 metadata also needs review before model use: for example, Technique may
 describe the delivered treatment rather than information known at decision time.
-
-## Institutional examples in generated answers
-
-The local `codex/institutional-examples` implementation builds on
-`grounded-citations` (base commit `1994a8c`). It preserves that branch's
-citation checker, model settings, and self-critique/rewrite behavior. The new
-feature is off by default and is available through the development baseline
-runner and the Python engine; the web/API request schema is unchanged.
-
-Use the existing index format described below. Generated `.npy`, `.jsonl`
-and manifest files are ignored by Git; fetching a branch does not copy them.
-An existing index can be supplied with `--past-case-index /path/to/past_case_index`.
-Its parent folder must contain its original `development_examples.jsonl`.
-
-```bash
-# No AWS calls; validates the development inputs, not the index files.
-python patient_cases/run_baseline.py --institutional-examples
-python patient_cases/verify_institutional_examples.py
-
-# Paid answer-generation calls, after AWS login and index preparation.
-python patient_cases/run_baseline.py --execute --limit 1 --name examples-off
-python patient_cases/run_baseline.py --execute --limit 1 --name examples-on --institutional-examples
-```
-
-Both runs use the same default input case. Use new names for deliberate
-repeats. Keep writer model, evidence settings and evaluation cohort fixed for
-comparisons; the live evidence sources are still not a frozen snapshot.
-
-The adapter rejects an index with a different embedding model/dimension,
-changed payloads or manifest, a stale development export, or a corpus that
-differs from the current workbook's development cases. Only eligible
-Development records are permitted. The exact query case and all encounters
-of its patient are excluded. The existing matching tiers and 0.50 similarity
-floor select at most two examples. A known development query reuses its
-stored vector; an unindexed query needs an embedding.
-
-Selected examples are labelled historical practice, are not numbered as
-evidence, and cannot enter the citation-passage list. The writer is instructed
-to support medical recommendations with numbered clinical evidence and to
-request missing patient information rather than copy it from an example.
-When enabled, an empty evidence retrieval cannot be replaced by examples.
-These instructions are constraints on the prompt, not proof of clinical accuracy.
-
-Each saved response now records `institutional_examples` (index provenance,
-selected case IDs, similarities and payloads) and `synthesis_requests` (exact
-writer prompts, including rewrites). Patient IDs and the query case's own
-attending plan are not supplied to the writer. These local outputs contain
-clinical text. Eason's citation checker still receives clinical passages only;
-the judge's evidence context also remains separate from examples.
-
-For direct Python use, set `config.features.institutional_examples=True` and
-call `engine.query(context.query(), labels, case_context=context)`, where
-`context` is `core.institutional_examples.CaseContext` with vignette,
-clinical_question, case_id and patient_id. Provide an expected development
-export SHA-256 through `config.features.past_case_source_sha256` when a
-workbook corpus is known; the baseline runner does this automatically.
 
 ## Past-case index
 

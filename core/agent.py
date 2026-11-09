@@ -9,7 +9,7 @@ from datetime import datetime
 
 from .models import (
     AgentResponse, TaskPlan, QueryAnalysis, Citation,
-    SelfCritiqueResult, TaskStatus, QueryIntent, RetrievedChunk, SubTask, RetrievalStrategy
+    SelfCritiqueResult, TaskStatus, QueryIntent, RetrievedChunk
 )
 from config import Config, default_config
 from .llm_client import create_llm_client, BaseLLMClient
@@ -18,11 +18,8 @@ from .task_planner import TaskPlanner
 from .retriever import RetrieverManager, MockRetrieverManager
 from .synthesizer import ResponseSynthesizer, SelfCritic
 from .citation_check import CitationChecker, cited
-from .critic_edits import GAP_LIMIT, GapFiller, apply_edits
 from .guardrails import GuardrailManager
 from .case_labels import NOT_SPECIFIED, CaseLabels
-from .site_routing import EvidenceScope, scope_for, table_fingerprint
-from .institutional_examples import CaseContext, LocalInstitutionalExamples
 
 
 class AgenticRAGEngine:
@@ -38,8 +35,7 @@ class AgenticRAGEngine:
     6. Safety guardrails
     """
 
-    def __init__(self, config: Config = None, use_mock: bool = False, enable_judge: bool = True,
-                 example_provider=None):
+    def __init__(self, config: Config = None, use_mock: bool = False, enable_judge: bool = True):
         """
         Initialize the Agentic RAG Engine.
 
@@ -51,13 +47,6 @@ class AgenticRAGEngine:
         self.config = config or default_config
         self.use_mock = use_mock
         self.enable_judge = enable_judge
-        self.example_provider = example_provider
-        if self.config.features.institutional_examples and self.example_provider is None:
-            self.example_provider = LocalInstitutionalExamples(
-                self.config.features.past_case_index_path,
-                self.config.embedding.model_id, self.config.embedding.dimension,
-                expected_source_sha256=self.config.features.past_case_source_sha256,
-            )
 
         # Initialize LLM client
         self.llm = create_llm_client(
@@ -80,15 +69,7 @@ class AgenticRAGEngine:
             )
 
         self.synthesizer = ResponseSynthesizer(self.llm, self.config)
-        # The critique may run on a model of its own, so the answer is checked by a model other than its writer
-        critic_model = self.config.features.critic_model
-        critic_llm = create_llm_client(replace(self.config.llm, model_id=critic_model), self.config.aws,
-                                       use_mock=use_mock) if critic_model else self.llm
-        self.self_critic = SelfCritic(critic_llm, self.config.agent, named_gap=self.config.features.critic_named_gap,
-                                      edits=self.config.features.critic_edits,
-                                      template=self.config.features.completeness_template)
-        # The sentence for a searched gap is answer text, so the writer's model writes it and the critique checks it
-        self.gap_filler = GapFiller(self.llm)
+        self.self_critic = SelfCritic(self.llm, self.config.agent)
         self.citation_checker = CitationChecker(self.llm)
         self.guardrails = GuardrailManager(self.config.guardrail)
 
@@ -293,43 +274,6 @@ class AgenticRAGEngine:
                 merged.setdefault(topic, []).extend(new)
         return merged
 
-    def _search_gaps(self, query: str, plan: TaskPlan, scope: EvidenceScope, gaps: List[Dict], answer: str,
-                     first_chunks: List[Dict], passages: List[Dict], report: Dict) -> tuple:
-        """Search once for each gap the critique verified and add what a new passage covers (critic edits).
-
-        Returns the answer, the passages, the plan with the searches added, and whether any text was added."""
-        # The limit is kept here, where the searches happen, whatever the critique returned
-        gaps = gaps[:GAP_LIMIT]
-        report.update({"gaps": gaps, "gap_passages": [], "fill": None})
-        if not gaps:
-            return answer, passages, plan, False
-        retriever = self.config.retriever
-        # 💡 Paired as the planner pairs them, one search of the review notes and one of the trial papers, and
-        # labelled with the item, so each gap is reranked against the question plus that item
-        tasks = [SubTask(task_id=f"gap_{i}_{source}", description=f"{prefix} {gap['item']}", query=gap["query"],
-                         retrieval_strategy=strategy, top_k=top_k, status=TaskStatus.PENDING)
-                 for i, gap in enumerate(gaps, start=1)
-                 for source, prefix, strategy, top_k in (
-                     ("notes", "[Guidelines]", RetrievalStrategy.DENSE, retriever.faiss_complex_top_k),
-                     ("trials", "[Trial papers]", RetrievalStrategy.KNOWLEDGE_BASE, retriever.kb_complex_top_k))]
-        for task in tasks:
-            self.retriever.execute_task(task, scope)
-        # ⚠️ The answer's own passages are left out before the cut, so each gap keeps up to three new ones; the
-        # critique already found that they do not cover it
-        found = self._collect_multi_topic_chunks(replace(plan, sub_tasks=tasks),
-                                                 exclude={self._chunk_key(c) for c in first_chunks})
-        new_chunks = [c for chunks in found.values() for c in chunks]
-        plan = replace(plan, sub_tasks=plan.sub_tasks + tasks)
-        self._log_reasoning("GAPS", f"Searched {len(gaps)} gaps, found {len(new_chunks)} new passages")
-        if not new_chunks:
-            return answer, passages, plan, False
-        start = max((p["citation_id"] for p in passages), default=0) + 1
-        context, added = self.synthesizer.extend_passages(new_chunks, start)
-        report["gap_passages"] = [p["citation_id"] for p in added]
-        answer, report["fill"] = apply_edits(answer, self.gap_filler.fill(query, answer, gaps, context))
-        self._log_reasoning("GAPS", f"Filled {len(report['fill']['applied'])} of {len(gaps)} gaps")
-        return answer, passages + added, plan, bool(report["fill"]["applied"])
-
     def _enrich_citations_with_urls(self, citations: List[Citation]) -> List[Citation]:
         for citation in citations:
             if not citation.source_url:
@@ -350,14 +294,13 @@ class AgenticRAGEngine:
 
 
     def query(self, user_query: str, labels: Optional[CaseLabels] = None,
-              case_context: Optional[CaseContext] = None, plan: Optional[TaskPlan] = None) -> AgentResponse:
+              plan: Optional[TaskPlan] = None) -> AgentResponse:
         """
         Process a user query through the agentic RAG pipeline.
 
         Args:
             user_query: The user's clinical question.
-            labels: Case labels selected by the user; used only when a feature switch asks for them.
-            case_context: Exact vignette/question and study linkage, required when examples are enabled.
+            labels: Case labels selected by the user; the disease site is what passages are reranked against.
             plan: A saved plan to search with instead of analyzing and planning again (evaluation runs only).
 
         Returns:
@@ -384,12 +327,6 @@ class AgenticRAGEngine:
 
         # Use filtered text if PHI was removed
         processed_query = input_check.filtered_text or user_query
-
-        # Linkage is validated before paid calls and is never included in the clinical query.
-        if self.config.features.institutional_examples:
-            if case_context is None or case_context.query() != processed_query:
-                raise ValueError("Institutional examples require structured case context matching the query.")
-            self.example_provider.validate_context(case_context)
 
         # A plan made for another query would search for the wrong patient; checked before any paid call
         if plan is not None and plan.original_query != processed_query:
@@ -433,18 +370,16 @@ class AgenticRAGEngine:
 
         # ========== Step 4: Execute Retrieval Tasks ==========
         labels = labels or CaseLabels()
-        scope = scope_for(labels.disease_site) if self.config.features.site_filter else EvidenceScope()
-        rerank_site = (labels.disease_site if self.config.features.rerank_site_query
-                       and labels.disease_site != NOT_SPECIFIED else None)
-        if scope != EvidenceScope():
-            self._log_reasoning("ROUTE", f"Evidence limited to {labels.disease_site}")
+        # Each topic's passages are reranked against the selected disease site (docs/rag_improvement_plan_v2.md,
+        # E2 option (b)); with no site selected, against the whole vignette
+        rerank_site = labels.disease_site if labels.disease_site != NOT_SPECIFIED else None
         self._log_reasoning("RETRIEVE", "Executing retrieval tasks")
 
         for task in plan.sub_tasks:
             self._log_reasoning("RETRIEVE",
                 f"Task '{task.description}' using {task.retrieval_strategy.value}"
             )
-            self.retriever.execute_task(task, scope)
+            self.retriever.execute_task(task)
             self._log_reasoning("RETRIEVE", f"Result: {task.result}")
 
         # Collect chunks differently based on query type
@@ -463,39 +398,16 @@ class AgenticRAGEngine:
                 f"Collected {len(all_chunks)} chunks (cross-encoder reranked)"
             )
 
-        example_audit = {"enabled": self.config.features.institutional_examples}
-        selected_examples = None
-
-        def writer_options(evidence_count):
-            nonlocal selected_examples
-            if not self.config.features.institutional_examples:
-                return {}
-            example_audit.update(self.example_provider.provenance())
-            if not evidence_count:
-                examples = []
-                example_audit["status"] = "no_evidence"
-            else:
-                if selected_examples is None:
-                    selected_examples = self.example_provider.select(
-                        case_context, labels, self.retriever._get_embedding,
-                    )
-                    self._log_reasoning("EXAMPLES", f"Selected {len(selected_examples)} institutional examples")
-                examples = selected_examples
-                example_audit["status"] = "selected" if examples else "no_matching_examples"
-            example_audit["examples"] = examples
-            return {"institutional_examples": examples}
-
         # ========== Step 5: Response Synthesis ==========
         self._log_reasoning("SYNTHESIZE", "Generating response from retrieved information")
-        options = writer_options(total_chunks)
 
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
             answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
-                processed_query, analysis, chunks_by_topic, **options
+                processed_query, analysis, chunks_by_topic
             )
         else:
             answer, citations, confidence, context_passages = self.synthesizer.synthesize(
-                processed_query, analysis, plan, all_chunks, **options
+                processed_query, analysis, plan, all_chunks
             )
         self._log_reasoning("SYNTHESIZE",
             f"Generated answer with {len(citations)} citations, confidence: {confidence:.2f}"
@@ -503,33 +415,17 @@ class AgenticRAGEngine:
 
         # ========== Step 6: Self-Critique ==========
         critique = None
-        edit_report = None
-        edits_on = self.config.features.critic_edits
         if self.config.agent.enable_self_critique:
             self._log_reasoning("CRITIQUE", "Performing self-evaluation")
             # Kept with the critique, so why an answer was rewritten can be read against the text that was judged
             first_draft = answer
-            # Only the edit critique reads the passages; the default one never did
-            extra = {"passages": context_passages} if edits_on else {}
-            critique = self.self_critic.critique(processed_query, answer, analysis, **extra)
+            critique = self.self_critic.critique(processed_query, answer, analysis)
 
             self._log_reasoning("CRITIQUE",
                 f"Complete: {critique.is_complete}, "
                 f"Safe: {critique.is_safe}, "
                 f"Confidence: {critique.confidence_score:.2f}"
             )
-
-            if edits_on:
-                edit_report = {"edits": len(critique.edits), "applied": [], "failed": [],
-                               "rewritten": critique.main_recommendation_wrong}
-            if edits_on and critique.edits and not critique.main_recommendation_wrong:
-                answer, edit_report = apply_edits(answer, critique.edits)
-                edit_report["rewritten"] = False
-                # 💡 An edit may cite a passage the draft did not, so the source list follows the edited answer
-                citations = [c for c in self.synthesizer.citations if c.citation_id in cited(answer)]
-                confidence = (confidence + critique.confidence_score) / 2
-                self._log_reasoning("CRITIQUE",
-                    f"Applied {len(edit_report['applied'])} of {edit_report['edits']} edits")
 
             # Retry if critique suggests improvement needed
             if self.self_critic.should_retry(critique):
@@ -538,24 +434,15 @@ class AgenticRAGEngine:
                 # Get improvement guidance
                 guidance = self.self_critic.get_improvement_guidance(critique)
 
-                improved_plan = None
-                # ⚠️ Under critic edits the rewrite of a wrong recommendation does not re-plan either: it works
-                # from the first round's passages, and only the gaps are searched, after the retry
-                if self.config.features.replan and not edits_on:
-                    # Replan with feedback
-                    improved_plan = self.task_planner.replan(plan, guidance)
+                # Replan with feedback
+                # ⚠️ Rewriting from the first round's passages alone, without a re-plan, cost about 0.3 completeness
+                # (docs/rag_improvement_plan_v2.md, Part 1), although re-plan passages carry more table errors
+                improved_plan = self.task_planner.replan(plan, guidance)
 
-                    # Re-execute new tasks
-                    for task in improved_plan.sub_tasks:
-                        if task.status == TaskStatus.PENDING:
-                            # ⚠️ The retry must keep the scope, or re-planned tasks would reach other sites
-                            self.retriever.execute_task(task, scope)
-                else:
-                    # ⚠️ Re-plan passages carried 6 of 11 judged table and attribution errors and added 8-20 searches
-                    # per case; without them the rewrite works from the first round's passages, the feedback and
-                    # its own draft
-                    self._log_reasoning("CRITIQUE", "Rewriting from the first round's passages"
-                                        + (" (main recommendation wrong)" if edits_on else " (re-plan off)"))
+                # Re-execute new tasks
+                for task in improved_plan.sub_tasks:
+                    if task.status == TaskStatus.PENDING:
+                        self.retriever.execute_task(task)
 
                 # Re-synthesize — use same path as first attempt based on query type
                 # ⚠️ The new passages are added to the first round's, not swapped in, so a rewrite asked to fill a
@@ -563,68 +450,41 @@ class AgenticRAGEngine:
                 # reranker scores against the question, not the gap, so the first round's passages would win again.
                 # The writer also gets the feedback and its draft; before, only the search planner saw the feedback
                 if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-                    if improved_plan is not None:
-                        chunks_by_topic = self._merge_topics(
-                            chunks_by_topic, self._collect_multi_topic_chunks(improved_plan, site=rerank_site)
-                        )
-                    options = writer_options(sum(len(chunks) for chunks in chunks_by_topic.values()))
+                    chunks_by_topic = self._merge_topics(
+                        chunks_by_topic, self._collect_multi_topic_chunks(improved_plan, site=rerank_site)
+                    )
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
-                        processed_query, analysis, chunks_by_topic, feedback=guidance, draft=answer, **options
+                        processed_query, analysis, chunks_by_topic, feedback=guidance, draft=answer
                     )
                 else:
-                    if improved_plan is not None:
-                        all_chunks = self._merge_chunks(all_chunks, self._collect_all_chunks(improved_plan))
-                    options = writer_options(len(all_chunks))
+                    all_chunks = self._merge_chunks(all_chunks, self._collect_all_chunks(improved_plan))
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize(
-                        processed_query, analysis, improved_plan or plan, all_chunks, feedback=guidance, draft=answer,
-                        **options
+                        processed_query, analysis, improved_plan, all_chunks, feedback=guidance, draft=answer
                     )
 
                 # Update confidence with critique score
                 confidence = (confidence + critique.confidence_score) / 2
                 # The recorded plan lists every search the answer drew on; a failed replan returns the plan unchanged
-                if improved_plan is not None and improved_plan is not plan:
+                if improved_plan is not plan:
                     plan = replace(improved_plan, sub_tasks=plan.sub_tasks + improved_plan.sub_tasks)
-
-            if edits_on:
-                multi = analysis.intent == QueryIntent.COMPARISON or analysis.is_complex
-                first_chunks = [c for chunks in chunks_by_topic.values() for c in chunks] if multi else all_chunks
-                answer, context_passages, plan, added = self._search_gaps(
-                    processed_query, plan, scope, critique.gaps, answer, first_chunks, context_passages, edit_report)
-                edit_report["second"] = None
-                # ⚠️ New text, from a gap search or a rewrite, is checked once more; that pass only edits, so the
-                # loop ends there
-                if added or critique.main_recommendation_wrong:
-                    second = self.self_critic.critique(processed_query, answer, analysis, passages=context_passages)
-                    answer, edit_report["second"] = apply_edits(answer, second.edits)
-                    self._log_reasoning("CRITIQUE", f"Second pass applied {len(edit_report['second']['applied'])} "
-                                                    f"of {edit_report['second']['edits']} edits")
-                # 💡 The source list follows the final answer, which may cite a passage the draft did not
-                citations = [c for c in self.synthesizer.citations if c.citation_id in cited(answer)]
 
         # ========== Step 6b: Citation Check ==========
         # After any retry, so the final answer is the one checked
-        citation_check = None
-        if self.config.features.citation_check:
-            self._log_reasoning("CHECK", "Checking each citation against its passage")
-            answer_before = answer
-            checked, citation_check = self.citation_checker.check(answer, context_passages)
-            # 💡 Kept so that a change to the check can be replayed on the same answer instead of a new run
-            citation_check["answer_before"] = answer_before
-            # ⚠️ In a sample of 50 removals, 16 were wrong and 29 were sentences the passage only partly supports
-            # (docs/rag_improvement_plan_v2.md, 0.3); flag-only leaves the answer as written and lists them instead
-            citation_check["flag_only"] = self.config.features.citation_flag_only
-            if not citation_check["flag_only"]:
-                answer = checked
-                # Only citations still in the answer stay in the source list
-                remaining = cited(answer)
-                citations = [c for c in citations if c.citation_id in remaining]
-            self._log_reasoning("CHECK",
-                f"{'Flagged' if citation_check['flag_only'] else 'Removed'} "
-                f"{citation_check['removed']} of {citation_check['citations']} citations, "
-                f"{citation_check['unchecked']} unchecked"
-                + (f", check failed: {citation_check['error']}" if citation_check["error"] else "")
-            )
+        self._log_reasoning("CHECK", "Checking each citation against its passage")
+        answer_before = answer
+        # ⚠️ In a sample of 50 removals, 16 were wrong and 29 were sentences the passage only partly supports
+        # (docs/rag_improvement_plan_v2.md, 0.3)
+        answer, citation_check = self.citation_checker.check(answer, context_passages)
+        # 💡 Kept so that a change to the check can be replayed on the same answer instead of a new run
+        citation_check["answer_before"] = answer_before
+        # Only citations still in the answer stay in the source list
+        remaining = cited(answer)
+        citations = [c for c in citations if c.citation_id in remaining]
+        self._log_reasoning("CHECK",
+            f"Removed {citation_check['removed']} of {citation_check['citations']} citations, "
+            f"{citation_check['unchecked']} unchecked"
+            + (f", check failed: {citation_check['error']}" if citation_check["error"] else "")
+        )
 
         # ========== Step 7: Output Guardrails ==========
         self._log_reasoning("GUARDRAIL", "Checking output safety")
@@ -655,17 +515,8 @@ class AgenticRAGEngine:
             self_critique=critique,
             task_plan=plan,
             context_passages=context_passages,
-            institutional_examples=example_audit,
             synthesis_requests=list(self.synthesizer.requests),
-            routing={
-                "labels": vars(labels),
-                "site_filter": self.config.features.site_filter,
-                "review_note_categories": sorted(scope.review_note_categories)
-                if scope.review_note_categories is not None else None,
-                "trial_paper_folders": sorted(scope.trial_paper_folders)
-                if scope.trial_paper_folders is not None else None,
-                "site_table": table_fingerprint(),
-            },
+            routing={"labels": vars(labels)},
             metadata={
                 "analysis": {
                     "intent": analysis.intent.value,
@@ -683,12 +534,9 @@ class AgenticRAGEngine:
             },
             latency_ms=latency_ms
         )
-        if citation_check is not None:
-            response.metadata["citation_check"] = citation_check
+        response.metadata["citation_check"] = citation_check
         if critique is not None:
             response.metadata["first_draft"] = first_draft
-        if edit_report is not None:
-            response.metadata["critic_edits"] = edit_report
 
         # ========== Step 8: LLM Judge Evaluation ==========
         if self.enable_judge:

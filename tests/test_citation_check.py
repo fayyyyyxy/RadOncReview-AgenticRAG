@@ -72,7 +72,7 @@ class CitationCheckerTests(unittest.TestCase):
         self.assertEqual(report["uncited_sentences"], [f"- {MRC}"])
 
     def test_the_report_lists_each_rejected_citation_with_its_sentence(self):
-        # A flag-only run keeps rejected citations in the answer, so the report is where they are found
+        # The answer loses the rejected citations, so the report is where a reader finds them
         _, report = CitationChecker(FakeLLM(rejected={6})).check(ANSWER, PASSAGES)
 
         self.assertEqual(report["rejected"], [{"sentence": f"- {MRC} [5] [6]", "citation": 6}])

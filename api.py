@@ -25,7 +25,7 @@ class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000, description="Clinical question")
     include_reasoning: bool = Field(default=False, description="Include reasoning trace")
     include_citations: bool = Field(default=True, description="Include source citations")
-    # Drop-down choices from core/case_labels.py; used only when a feature switch is on
+    # Drop-down choices from core/case_labels.py; the disease site is what passages are reranked against
     disease_site: str = Field(default=NOT_SPECIFIED, description="Disease site of the case")
     setting_group: str = Field(default=NOT_SPECIFIED, description="Treatment setting group")
     prior_rt: str = Field(default=NOT_SPECIFIED, description="Prior radiotherapy")

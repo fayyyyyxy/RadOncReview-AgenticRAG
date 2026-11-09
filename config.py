@@ -40,9 +40,10 @@ class AWSConfig:
 @dataclass
 class LLMConfig:
     """LLM configuration for AWS Bedrock."""
-    # Llama 3.3 70B through the US cross-region inference profile; baseline runs use it too (patient_cases/run_baseline.py)
-    model_id: str = "us.meta.llama3-3-70b-instruct-v1:0"
-    max_tokens: int = 2048  # Llama max_gen_len
+    # GPT-5.6 Terra through the US cross-region inference profile, the model of every final-comparison arm; baseline
+    # runs use it too (patient_cases/run_baseline.py)
+    model_id: str = "us.openai.gpt-5.6-terra"
+    max_tokens: int = 2048  # Llama max_gen_len, for a Llama, Claude or Titan model passed instead
     # ⚠️ Models sent through Converse (GPT-5.x) may reason before writing, and that counts toward the limit;
     # at 2048, 9 of 40 GPT-5.6 Terra rewrites were cut off mid-answer
     converse_max_tokens: int = 8192
@@ -109,35 +110,6 @@ class GuardrailConfig:
 
 
 @dataclass
-class FeatureConfig:
-    """Switches for evaluated changes; each stays off until its evaluation supports turning it on in the web app."""
-    site_filter: bool = False  # limit evidence to the user-selected disease site (core/site_routing.py)
-    citation_check: bool = True  # check each citation against its passage after writing (core/citation_check.py)
-    institutional_examples: bool = False
-    # The Part 1 repair batch (docs/rag_improvement_plan_v2.md); run_baseline --repair-batch turns all three over
-    replan: bool = True  # after a critique, search again with a re-plan; False rewrites from the first round's passages
-    critic_named_gap: bool = False  # the critique counts "the provided evidence does not cover it" as addressed
-    citation_flag_only: bool = False  # rejected citations stay in the answer and are only listed in the report
-    # The critique reads the passages and returns sentence edits, which code applies; only a wrong main
-    # recommendation is rewritten, from the first round's passages; only items no passage covers are searched
-    # for again (docs/rag_improvement_plan_v2.md, E4)
-    critic_edits: bool = False
-    # A model ID for the self-critique alone, so the answer is checked by a model other than the one that wrote it;
-    # None keeps the shared client
-    critic_model: Optional[str] = None
-    # Rank each topic's candidates against the selected disease site and the topic's label, not the whole vignette
-    # and the label (docs/rag_improvement_plan_v2.md, E2 option (b)); with no site selected the vignette is kept
-    rerank_site_query: bool = False
-    # The writer answers under the seven parts of the workbook's Completeness anchor and the critique checks them as
-    # well as what the question asks; a part no passage covers gets the usual practice, marked as not in the evidence
-    # (docs/rag_improvement_plan_v2.md, E1). The critic-edits critique is not changed. On by default: the user's choice
-    # after the 40-case arm, although one of its answers reached Harm 3 where final had none
-    completeness_template: bool = True
-    past_case_index_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/past_case_index")
-    past_case_source_sha256: Optional[str] = None
-
-
-@dataclass
 class Config:
     """Main configuration container."""
     aws: AWSConfig = field(default_factory=AWSConfig)
@@ -146,7 +118,6 @@ class Config:
     retriever: RetrieverConfig = field(default_factory=RetrieverConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     guardrail: GuardrailConfig = field(default_factory=GuardrailConfig)
-    features: FeatureConfig = field(default_factory=FeatureConfig)
 
 
 # Default configuration instance

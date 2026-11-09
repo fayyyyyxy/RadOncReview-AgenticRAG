@@ -120,7 +120,7 @@ def json_value(value):
     raise TypeError(f"Unsupported output type: {type(value).__name__}")
 
 
-def run_case(engine, item, max_length, labels=None, case_context=None, plan=None):
+def run_case(engine, item, max_length, labels=None, plan=None):
     """Save blocked/error cases explicitly; never truncate clinical input."""
     query = make_query(item)
     labels = labels or CaseLabels()
@@ -132,7 +132,7 @@ def run_case(engine, item, max_length, labels=None, case_context=None, plan=None
     try:
         engine.reset_conversation()
         with redirect_stdout(log), redirect_stderr(log):
-            extra = {key: value for key, value in (("case_context", case_context), ("plan", plan)) if value is not None}
+            extra = {"plan": plan} if plan is not None else {}
             response = engine.query(query, labels, **extra)
         retrieval = response.metadata.get("retrieval", {})
         status = "response_generated"
@@ -159,33 +159,10 @@ def main(argv=None):
     parser.add_argument("--model", default=WRITER_MODEL, help="Bedrock model ID for every engine LLM call.")
     parser.add_argument("--execute", action="store_true", help="Make real AWS retrieval and paid model calls.")
     parser.add_argument("--judge", action="store_true", help="Enable additional paid LLM judge calls.")
-    parser.add_argument("--name", help="Readable run name such as site-filter; answers go to outputs/<name>_answers.")
-    parser.add_argument("--site-filter", action="store_true", help="Limit evidence to each case's disease site.")
-    parser.add_argument("--no-trial-papers", action="store_true", help="Search review notes only, not the trial-paper Knowledge Base.")
-    parser.add_argument("--no-citation-check", action="store_true", help="Skip the citation check, as runs made before it did.")
-    parser.add_argument("--institutional-examples", action="store_true", help="Include up to two institutional examples in synthesis.")
-    parser.add_argument("--past-case-index", type=Path, help="Existing local past-case index folder (does not build it).")
+    parser.add_argument("--name", help="Readable run name such as p3-final; answers go to outputs/<name>_answers.")
     parser.add_argument("--replay-plans", metavar="NAME",
                         help="Search with the first-round plans saved in outputs/NAME_answers instead of planning anew, "
                              "so runs compared case by case retrieve the same first-round passages.")
-    parser.add_argument("--repair-batch", action="store_true",
-                        help="Turn on the whole repair batch: no re-plan, the critic accepts a named gap, and the "
-                             "citation check only flags (docs/rag_improvement_plan_v2.md, Part 1).")
-    parser.add_argument("--no-replan", action="store_true",
-                        help="After a critique, rewrite from the first round's passages without searching again.")
-    parser.add_argument("--citation-flag-only", action="store_true",
-                        help="Keep the citations the check rejects in the answer and only list them in its report.")
-    parser.add_argument("--critic-edits", action="store_true",
-                        help="The critique reads the passages and returns sentence edits, which code applies; only a "
-                             "wrong main recommendation is rewritten (docs/rag_improvement_plan_v2.md, E4).")
-    parser.add_argument("--critic-model", help="Bedrock model ID for the self-critique alone, e.g. "
-                                               "us.openai.gpt-5.6-sol; every other call keeps --model.")
-    parser.add_argument("--rerank-site-query", action="store_true",
-                        help="Rank each topic's passages against the case's disease site and the topic label instead "
-                             "of the whole vignette (docs/rag_improvement_plan_v2.md, E2 option (b)).")
-    parser.add_argument("--no-completeness-template", action="store_true",
-                        help="Answer without the seven parts of the workbook's Completeness anchor, as before E1 "
-                             "(docs/rag_improvement_plan_v2.md); the template is on by default.")
     args = parser.parse_args(argv)
     try:
         for flag, value in (("--name", args.name), ("--replay-plans", args.replay_plans)):
@@ -205,15 +182,7 @@ def main(argv=None):
         # No engine import, model download or AWS calls in dry-run mode.
         if not args.execute:
             print(json.dumps({
-                "mode": "dry_run", "aws_calls": 0, "model": args.model, "site_filter": args.site_filter,
-                "trial_papers": not args.no_trial_papers, "citation_check": not args.no_citation_check,
-                "institutional_examples": args.institutional_examples, "replayed_plans": args.replay_plans,
-                "repair_batch": args.repair_batch, "replan": not (args.no_replan or args.repair_batch),
-                "citation_flag_only": args.citation_flag_only or args.repair_batch,
-                "critic_edits": args.critic_edits, "critic_model": args.critic_model,
-                "rerank_site_query": args.rerank_site_query,
-                "completeness_template": not args.no_completeness_template,
-                "example_index_validation": "not_performed_in_dry_run" if args.institutional_examples else "not_requested",
+                "mode": "dry_run", "aws_calls": 0, "model": args.model, "replayed_plans": args.replay_plans,
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
                 "selected": [{"case_id": r["case_id"], "query_characters": len(make_query(r))} for r in selected],
@@ -228,35 +197,6 @@ def main(argv=None):
         config.llm.temperature = 0.0
         # ⚠️ One shared client serves the analyzer, planner, writer and self-critique, so all of them switch
         config.llm.model_id = args.model
-        config.features.site_filter = args.site_filter
-        config.features.citation_check = not args.no_citation_check
-        config.features.institutional_examples = args.institutional_examples
-        config.features.replan = not args.no_replan
-        config.features.citation_flag_only = args.citation_flag_only
-        config.features.critic_edits = args.critic_edits
-        config.features.critic_model = args.critic_model
-        config.features.rerank_site_query = args.rerank_site_query
-        config.features.completeness_template = not args.no_completeness_template
-        if args.repair_batch:
-            # 💡 One flag for the batch, so a run never carries half of it
-            config.features.replan = False
-            config.features.critic_named_gap = True
-            config.features.citation_flag_only = True
-        if args.past_case_index is not None:
-            config.features.past_case_index_path = str(args.past_case_index.resolve())
-        case_contexts = {}
-        if args.institutional_examples:
-            from core.institutional_examples import CaseContext
-            workbook_records = read_records(args.workbook)
-            records = {r["Case ID"]: r for r in workbook_records}
-            export_path = ROOT / "data" / "processed" / "development_examples.jsonl"
-            config.features.past_case_source_sha256 = hashlib.sha256(export_path.read_bytes()).hexdigest()
-            case_contexts = {item["case_id"]: CaseContext(
-                vignette=item["vignette"], clinical_question=item["clinical_question"],
-                case_id=item["case_id"], patient_id=records[item["case_id"]]["Patient ID"],
-            ) for item in selected}
-        # The planner still makes a trial-paper task per topic; with the Knowledge Base off it returns nothing
-        config.aws.knowledge_base_enabled = not args.no_trial_papers
         # Log all settings, including the opt-in judge difference from the web app.
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
         # ⚠️ Tracked files only: untracked notes and drawings outside the code marked every run dirty
@@ -266,13 +206,12 @@ def main(argv=None):
         output = named or ROOT / "outputs" / ("baseline_" + run_id)
         output.mkdir(parents=True, exist_ok=False)
         manifest = {
-            "run_id": run_id, "mode": "evidence_with_institutional_examples" if args.institutional_examples else "existing_evidence_only_rag",
+            "run_id": run_id, "mode": "existing_evidence_only_rag",
             "git_commit": revision.stdout.strip(), "working_tree_dirty": bool(changes.stdout.strip()),
             "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "input_sha256": hashlib.sha256(args.inputs.read_bytes()).hexdigest(),
             "workbook_sha256": hashlib.sha256(args.workbook.read_bytes()).hexdigest(),
             "case_ids": [r["case_id"] for r in selected], "judge_enabled": args.judge,
-            "patient_example_retrieval": args.institutional_examples, "repair_batch": args.repair_batch,
             "config": asdict(config),
             "replayed_plans": {
                 "run": args.replay_plans,
@@ -287,12 +226,9 @@ def main(argv=None):
             # Store startup warnings, including any reranker model download failure.
             with (output / "startup.log").open("w", encoding="utf-8") as log, redirect_stdout(log), redirect_stderr(log):
                 engine = AgenticRAGEngine(config=config, enable_judge=args.judge)
-            if args.institutional_examples:
-                manifest["institutional_example_index"] = engine.example_provider.provenance()
-                (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             for item in selected:
                 result = run_case(engine, item, config.guardrail.max_input_length, labels[item["case_id"]],
-                                  case_contexts.get(item["case_id"]), plans.get(item["case_id"]))
+                                  plans.get(item["case_id"]))
                 with (output / "results.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(result, ensure_ascii=False, default=json_value) + "\n")
                 statuses.append(result["status"])
@@ -301,11 +237,6 @@ def main(argv=None):
                 sent = engine.llm.sampling_sent
                 if any(manifest["config"]["llm"][key] != value for key, value in sent.items()):
                     manifest["config"]["llm"].update(sent)
-                    (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-                # The critique's own model may reject them too, and its client keeps its own record
-                critic = engine.self_critic.llm
-                if critic is not engine.llm and manifest.get("critic_sampling_sent") != critic.sampling_sent:
-                    manifest["critic_sampling_sent"] = critic.sampling_sent
                     (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
                 print(f"{item['case_id']}: {result['status']}", flush=True)
         except Exception as exc:

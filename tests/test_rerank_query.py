@@ -1,6 +1,5 @@
-"""The rerank query (docs/rag_improvement_plan_v2.md, E2 option (b)): with rerank_site_query on, each topic's
-candidates are ranked against the selected disease site and the topic's label instead of the whole vignette and the
-label. No AWS."""
+"""The rerank query (docs/rag_improvement_plan_v2.md, E2 option (b)): each topic's candidates are ranked against the
+selected disease site and the topic's label instead of the whole vignette and the label. No AWS."""
 
 import contextlib
 import io
@@ -14,13 +13,10 @@ QUESTION = "Patient vignette:\n65F with cT1N0 rectal adenocarcinoma.\n\nClinical
 SITE = CaseLabels(disease_site="Gastrointestinal")
 
 
-def make_engine(**features):
+def make_engine():
     from core.agent import AgenticRAGEngine
-    config = Config()
-    for name, value in features.items():
-        setattr(config.features, name, value)
     with contextlib.redirect_stdout(io.StringIO()):
-        return AgenticRAGEngine(config=config, use_mock=True, enable_judge=False)
+        return AgenticRAGEngine(config=Config(), use_mock=True, enable_judge=False)
 
 
 def saved_plan():
@@ -35,8 +31,8 @@ def saved_plan():
 class RerankQueryTests(unittest.TestCase):
     """The mock search gives every topic one passage; the queries the reranker is given are recorded."""
 
-    def run_query(self, labels=None, critique=None, replan=None, **features):
-        engine = make_engine(**features)
+    def run_query(self, labels=None, critique=None, replan=None):
+        engine = make_engine()
         self.queries = []
         rerank = engine.retriever.rerank
         engine.retriever.rerank = lambda query, chunks, top_k=5: (self.queries.append(query),
@@ -49,15 +45,12 @@ class RerankQueryTests(unittest.TestCase):
             engine.query(QUESTION, labels=labels, plan=saved_plan())
         return self.queries
 
-    def test_the_vignette_and_label_by_default(self):
-        self.assertEqual(self.run_query(SITE), [f"{QUESTION} boost dose", f"{QUESTION} boost target"])
-
-    def test_the_site_and_label_when_on(self):
-        self.assertEqual(self.run_query(SITE, rerank_site_query=True),
+    def test_the_site_and_label(self):
+        self.assertEqual(self.run_query(SITE),
                          ["Gastrointestinal boost dose", "Gastrointestinal boost target"])
 
     def test_no_selected_site_keeps_the_vignette(self):
-        self.assertEqual(self.run_query(CaseLabels(), rerank_site_query=True),
+        self.assertEqual(self.run_query(CaseLabels()),
                          [f"{QUESTION} boost dose", f"{QUESTION} boost target"])
 
     def test_a_replanned_topic_without_a_label_ranks_on_the_site(self):
@@ -70,7 +63,7 @@ class RerankQueryTests(unittest.TestCase):
                            retrieval_strategy=RetrievalStrategy.DENSE, top_k=6)
             return TaskPlan(plan_id="plan_re", original_query=QUESTION, analysis=plan.analysis, sub_tasks=[task])
 
-        queries = self.run_query(SITE, critique=unsafe, replan=replan, rerank_site_query=True)
+        queries = self.run_query(SITE, critique=unsafe, replan=replan)
         self.assertEqual(queries, ["Gastrointestinal boost dose", "Gastrointestinal boost target", "Gastrointestinal"])
 
 

@@ -2,7 +2,6 @@
 Response Synthesizer: Generates answers from retrieved chunks with citations.
 """
 from typing import List, Dict, Optional
-import json
 
 from .models import (
     RetrievedChunk, Citation, AgentResponse, TaskPlan,
@@ -10,14 +9,12 @@ from .models import (
 )
 from .llm_client import BaseLLMClient
 from .citation_check import GROUP, cited, split_references
-from .critic_edits import GAP_LIMIT, valid_edits
 from .query_analyzer import as_bool
 from config import AgentConfig, Config
 
-# The parts of a complete answer under the completeness template, in the order of the workbook's Completeness anchor
-# ("covers indication, targets, dose/fractionation, technique, key OAR constraints, systemic therapy and follow-up
-# where relevant"). 💡 One list for the writer and the critique, so the headings written and the parts checked cannot
-# drift apart
+# The parts of a complete answer, in the order of the workbook's Completeness anchor ("covers indication, targets,
+# dose/fractionation, technique, key OAR constraints, systemic therapy and follow-up where relevant").
+# 💡 One list for the writer and the critique, so the headings written and the parts checked cannot drift apart
 PLAN_PARTS = ("Indication", "Target volumes", "Dose and fractionation", "Technique", "Organ-at-risk constraints",
               "Systemic therapy", "Follow-up")
 
@@ -25,12 +22,14 @@ PLAN_PARTS = ("Indication", "Target volumes", "Dose and fractionation", "Techniq
 class ResponseSynthesizer:
     """Synthesizes final answers from retrieved information."""
 
+    # ⚠️ The answer covers every part of a plan, which may include parts the question does not ask about, so
+    # guidelines 1 and 2 ask for brevity within each part, not for leaving tangents out
     SYSTEM_PROMPT = """You are a radiation oncology clinical assistant.
 Your role is to provide accurate, guideline-based answers to clinical questions.
 
 Guidelines for your responses:
-1. **Directly answer the specific question asked - avoid tangential information**
-2. Be concise and focused - only include what's necessary to answer the question
+1. **Answer the specific question asked under the part of the answer it belongs to**
+2. Be concise within each part - only include what this patient needs
 3. Always cite your sources using [1], [2], etc.
 4. Use standard medical terminology
 5. If information is incomplete or uncertain, clearly state this
@@ -38,45 +37,14 @@ Guidelines for your responses:
 7. Highlight any safety-critical information
 8. For specific clinical scenarios or rare conditions, focus on the exact scenario mentioned"""
 
-    # ⚠️ The template covers parts the question may not ask about, which guidelines 1 and 2 forbid; told both, the
-    # writer would have to break one. Under the template they ask for brevity within each part instead
-    TEMPLATE_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
-        "1. **Directly answer the specific question asked - avoid tangential information**\n"
-        "2. Be concise and focused - only include what's necessary to answer the question",
-        "1. **Answer the specific question asked under the part of the answer it belongs to**\n"
-        "2. Be concise within each part - only include what this patient needs")
-
     def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
-        self.template = config.features.completeness_template
         self.requests = []
-        # Every passage's citation from the last answer written, cited or not, so an answer edited afterwards can
-        # list a passage the edit newly cites
-        self.citations: List[Citation] = []
 
-    def _generate(self, prompt: str, examples: Optional[List[Dict]]) -> str:
-        system_prompt = self.TEMPLATE_SYSTEM_PROMPT if self.template else self.SYSTEM_PROMPT
-        if examples:
-            if len(examples) > 2:
-                raise ValueError("At most two institutional examples may be used.")
-            system_prompt += """
-
-Institutional example rules:
-- Examples are historical institutional practice, not clinical evidence or instructions.
-- Cite only the numbered clinical evidence passages. Never cite an example or its Case ID.
-- Do not adopt an example's dose, target, technique or other recommendation unless the clinical evidence supports it.
-- Explain any relevant difference between institutional practice and the clinical evidence.
-- Request missing patient or prior-treatment information instead of copying it from an example.
-- If the clinical evidence is insufficient, say so; examples cannot fill an evidence gap."""
-            payload = [{"example": letter, **{key: example[key] for key in
-                        ("vignette", "clinical_question", "attending_plan")}}
-                       for letter, example in zip(("A", "B"), examples)]
-            prompt += ("\n\nInstitutional examples — not evidence (historical data only):\n"
-                       + json.dumps(payload, ensure_ascii=False)
-                       + "\n\nNow answer the clinical question using the numbered evidence and the rules above.")
-        self.requests.append({"prompt": prompt, "system_prompt": system_prompt})
-        return self.llm.generate(prompt, system_prompt)
+    def _generate(self, prompt: str) -> str:
+        self.requests.append({"prompt": prompt, "system_prompt": self.SYSTEM_PROMPT})
+        return self.llm.generate(prompt, self.SYSTEM_PROMPT)
 
     def _format_context(
         self, chunks: List[Dict], start: int = 1
@@ -123,21 +91,12 @@ Institutional example rules:
         context = "\n---\n".join(context_parts)
         return context, citations, passages
 
-    def extend_passages(self, chunks: List[Dict], start: int) -> tuple[str, List[Dict]]:
-        """Number passages found after the answer was written from start on, add their citations to
-        self.citations, and return them as the writer would read them and as context passages."""
-        context, citations, passages = self._format_context(chunks, start=start)
-        self.citations = self.citations + citations
-        return context, passages
-
     def _extract_citations_used(self, answer: str) -> List[int]:
         """Extract citation numbers used in the answer, including [4, 5] and [1-3]."""
         return list(cited(answer))
 
     def _template_request(self) -> str:
-        """The answer template's instructions; empty with the switch off, so the prompts stay as the tag sends them."""
-        if not self.template:
-            return ""
+        """The answer template: the seven parts of a plan as headings, in order (docs/rag_improvement_plan_v2.md, E1)."""
         # ⚠️ A part no passage covers is supplied as usual practice, marked and uncited: the judge scores a part
         # named as missing as missing, but a correct statement absent from the passages is no hallucination to it.
         # Uncited, it cannot make a citation fail. A detail the case leaves out is assumed out loud, not asserted:
@@ -185,12 +144,10 @@ instead of supplying it.
         all_chunks: List[Dict],
         feedback: Optional[str] = None,
         draft: Optional[str] = None,
-        institutional_examples: Optional[List[Dict]] = None,
     ) -> tuple[str, List[Citation], float, List[Dict]]:
         """Synthesize an answer from retrieved chunks; feedback and draft are given on a rewrite after self-critique."""
 
         if not all_chunks:
-            self.citations = []
             return (
                 "I could not find relevant information in the knowledge base to answer "
                 "your question. Please try rephrasing your query or ask about a different topic.",
@@ -201,14 +158,11 @@ instead of supplying it.
 
         # Format context and prepare citations
         context, all_citations, passages = self._format_context(all_chunks)
-        self.citations = all_citations
         revision = self._revision_request(feedback, draft)
         template = self._template_request()
-        # Three to five sentences cannot cover seven parts
-        concise = ("Be concise within each heading" if self.template
-                   else "Be concise - aim for 3-5 sentences unless the question requires more detail")
 
         # Build synthesis prompt
+        # ⚠️ Item 3 once asked for 3-5 sentences, which cannot cover seven parts
         synthesis_prompt = f"""Based on the following retrieved information, answer the clinical question.
 
 Question: {query}
@@ -223,7 +177,7 @@ Retrieved Information:
 Instructions:
 1. **Answer the EXACT question asked - focus on the specific scenario or condition mentioned**
 2. Prioritize the most directly relevant information from the sources
-3. {concise}
+3. Be concise within each heading
 4. Cite sources using [1], [2], etc. (use separate brackets for each citation)
 5. Only include general background information if the specific question is fully addressed first
 6. If key information is missing from the sources, state what's missing
@@ -232,7 +186,7 @@ Instructions:
 Answer:"""
 
         # Generate response
-        answer = self._generate(synthesis_prompt, institutional_examples)
+        answer = self._generate(synthesis_prompt)
 
         # Identify which citations were actually used
         citations_used = self._extract_citations_used(answer)
@@ -255,13 +209,8 @@ Answer:"""
         chunks_by_topic: Dict[str, List[Dict]],
         feedback: Optional[str] = None,
         draft: Optional[str] = None,
-        institutional_examples: Optional[List[Dict]] = None,
     ) -> tuple[str, List[Citation], float, List[Dict]]:
         """Synthesize an answer from multiple retrieval results; feedback and draft as in synthesize."""
-
-        if institutional_examples is not None and not any(chunks_by_topic.values()):
-            return self.synthesize(query, analysis, None, [], feedback=feedback, draft=draft,
-                                   institutional_examples=institutional_examples)
 
         # Format context for each topic
         context_parts = []
@@ -287,7 +236,6 @@ Answer:"""
             all_passages.extend({**p, "topic": topic, "group": group} for p in topic_passages)
 
         full_context = "\n\n".join(context_parts)
-        self.citations = all_citations
         revision = self._revision_request(feedback, draft)
         template = self._template_request()
 
@@ -312,7 +260,7 @@ Answer:"""
         Answer:
         """
 
-        answer = self._generate(synthesis_prompt, institutional_examples)
+        answer = self._generate(synthesis_prompt)
 
         # Calculate confidence
         citations_used = self._extract_citations_used(answer)
@@ -338,61 +286,29 @@ class SelfCritic:
     CRITIQUE_PROMPT = """You are a radiation oncology expert reviewer.
 Evaluate the following answer for completeness and safety."""
 
+    # ⚠️ Checking only what the question asks passed answers the judge marked down: 0 of 80 checklists held follow-up
+    # and 14 held OAR constraints, the two parts the judge most often found missing. The checklist adds the parts of
+    # a plan too, and "not applicable" keeps a part that does not apply from sending an answer back for nothing
+    ITEMS_RULE = ("List each thing the question explicitly asks for, in the question's own words. Then add each "
+                  f"of these parts of a complete answer that the list does not already cover: "
+                  f"{'; '.join(PLAN_PARTS)}. Leave out requests to cite sources; citations are checked separately.")
+    # ⚠️ Counting "the provided evidence does not cover it" as addressed marked every item addressed, and
+    # completeness fell (docs/rag_improvement_plan_v2.md, Part 1)
     ADDRESSED_RULE = ("Mark an item addressed only if the answer gives a specific recommendation for this patient. "
                       "Saying that the sources do not cover it, giving general background, or answering for another "
-                      "condition or setting does not count.")
-    # ⚠️ Under the rule above, an answer that says plainly what the evidence lacks goes back for a rewrite that has
-    # nothing new to say; with the critic_named_gap switch a named gap counts as addressed
-    NAMED_GAP_RULE = ("Mark an item addressed if the answer gives a specific recommendation for this patient, or if it "
-                      "says the provided evidence does not cover the item. General background, or an answer for "
-                      "another condition or setting, does not count.")
+                      "condition or setting does not count. A part the answer marks not applicable counts as "
+                      "addressed if it truly does not apply to this patient; if it does apply, it is not addressed.")
 
-    # ⚠️ The named gap without the passages took the writer's word for every gap: 0 of 161 items came back
-    # unaddressed. Reading the passages, the critique can tell a true gap from a skipped one
-    VERIFIED_GAP_RULE = ("Mark an item addressed if the answer gives a specific recommendation for this patient, or "
-                         "if it says the provided evidence does not cover the item and no passage covers it. If a "
-                         "passage covers it, the item is not addressed. General background, or an answer for another "
-                         "condition or setting, does not count.")
-    EDIT_PROMPT = """You are a radiation oncology expert reviewer.
-Check the following answer against the passages it was written from, and correct it sentence by sentence."""
-
-    QUESTION_ITEMS = ("List each thing the question explicitly asks for, in the question's own words. Do not add "
-                      "anything the question does not ask about. Leave out requests to cite sources; citations are "
-                      "checked separately.")
-    # ⚠️ Checking only what the question asks passed answers the judge marked down: 0 of 80 checklists held follow-up
-    # and 14 held OAR constraints, the two parts the judge most often found missing. The template checks its parts
-    # too, and "not applicable" keeps a part that does not apply from sending an answer back for nothing
-    TEMPLATE_ITEMS = ("List each thing the question explicitly asks for, in the question's own words. Then add each "
-                      f"of these parts of a complete answer that the list does not already cover: "
-                      f"{'; '.join(PLAN_PARTS)}. Leave out requests to cite sources; citations are checked separately.")
-    NOT_APPLICABLE_RULE = (" A part the answer marks not applicable counts as addressed if it truly does not apply to "
-                           "this patient; if it does apply, it is not addressed.")
-
-    def __init__(self, llm_client: BaseLLMClient, config: Config, named_gap: bool = False, edits: bool = False,
-                 template: bool = False):
+    def __init__(self, llm_client: BaseLLMClient, config: Config):
         self.llm = llm_client
         self.config = config
-        self.template = template
-        self.items_rule = self.TEMPLATE_ITEMS if template else self.QUESTION_ITEMS
-        self.addressed_rule = ((self.NAMED_GAP_RULE if named_gap else self.ADDRESSED_RULE)
-                               + (self.NOT_APPLICABLE_RULE if template else ""))
-        self.edits = edits
 
-    def critique(
-        self,
-        query: str,
-        answer: str,
-        analysis: QueryAnalysis,
-        passages: Optional[List[Dict]] = None
-    ) -> SelfCritiqueResult:
-        """Perform self-critique on the generated answer; under critic edits it also reads the passages."""
-        if self.edits:
-            return self._critique_with_edits(query, answer, analysis, passages or [])
-
+    def critique(self, query: str, answer: str, analysis: QueryAnalysis) -> SelfCritiqueResult:
+        """Perform self-critique on the generated answer."""
         # ⚠️ "Cite the supporting evidence" stays off the checklist: a rewrite told to name trials would invent them,
         # and naming a trial, study or year is where most judged hallucinations were.
         # ⚠️ No example items either: given "for example ... follow-up", the model listed follow-up as missing in 23
-        # of 40 answers although no question asked for it. The template lists its parts on purpose, with "not
+        # of 40 answers although no question asked for it. The parts of a plan are listed on purpose, with "not
         # applicable" as the way out
         critique_prompt = f"""Evaluate this radiation oncology answer:
 
@@ -402,8 +318,8 @@ Query Type: {analysis.intent.value}
 Answer:
 {answer}
 
-1. {self.items_rule}
-2. {self.addressed_rule}
+1. {self.ITEMS_RULE}
+2. {self.ADDRESSED_RULE}
 3. Note any recommendation that could harm this patient if followed.
 
 Respond in JSON format:
@@ -454,105 +370,8 @@ Respond in JSON format:
             confidence_score=0.5
         )
 
-    def _critique_with_edits(self, query: str, answer: str, analysis: QueryAnalysis,
-                             passages: List[Dict]) -> SelfCritiqueResult:
-        """The checklist, sentence edits for code to apply, and whether the main recommendation is wrong."""
-        # 💡 Numbered as the writer cited them, so a gap, a number or a citation can be checked against the passage
-        evidence = "\n\n".join(f"[{p['citation_id']}] {p['text']}" for p in passages)
-        # ⚠️ No caveats or reminders: inserted as edits, they would grow the answer the way the rewrites did, when
-        # 58% of 155 safety concerns asked for one and the judge did not reward them
-        critique_prompt = f"""Check this radiation oncology answer against the numbered passages it was written from.
-
-Question: {query}
-Query Type: {analysis.intent.value}
-
-Passages:
-{evidence}
-
-Answer:
-{answer}
-
-1. List each thing the question explicitly asks for, in the question's own words. Do not add anything the question \
-does not ask about. Leave out requests to cite sources; citations are checked separately.
-2. {self.VERIFIED_GAP_RULE}
-3. List edits to the answer. Each edit copies one sentence of the answer exactly as "sentence", and either replaces \
-it ("action": "replace") or adds new text after it ("action": "insert_after"). Make only these kinds of edit:
-- "split": the sentence cites a passage but also says something that passage does not. Replace it with the part \
-the passage supports, keeping its citation, and the rest as a separate sentence without a citation.
-- "cite": the sentence gives a number (a dose, fractions, a percentage, a volume or a limit) without a citation. If \
-a passage states the number, add that passage's citation; if none does, replace the number with a statement that \
-the provided evidence does not give it.
-- "recite": the sentence cites a passage that does not state it while another passage does. Change the citation \
-number.
-- "add": a passage covers something the question asks for that the answer leaves out or calls missing. Insert one \
-sentence with that passage's citation after the most closely related sentence.
-- "harm": following the sentence would harm this patient: an unsafe dose, target or drug, a contraindication, or \
-an organ-at-risk limit exceeded. Replace it with a safe statement.
-Do not add caveats, reminders, counselling, or advice to seek review. Cite only the passage numbers above, and \
-state nothing that neither the passages, the question nor the answer states.
-4. Set "main_recommendation_wrong" to true only if the answer's overall recommendation for the question, whether \
-to treat or the treatment approach as a whole, is wrong for this patient, and give the reason. A wrong sentence is \
-an edit, not this.
-5. List under "gaps" each thing the question asks for that no passage covers, at most three, each with a short \
-search query for the evidence that would cover it for this patient.
-
-Respond in JSON format:
-{{
-    "checklist": [{{"item": "<what the question asks for>", "addressed": <true or false>, \
-"gap": "<what is missing, if not addressed>"}}],
-    "edits": [{{"kind": "<split, cite, recite, add or harm>", "action": "<replace or insert_after>", \
-"sentence": "<copied exactly from the answer>", "text": "<the new text>"}}],
-    "gaps": [{{"item": "<what the question asks for>", "query": "<search query>"}}],
-    "main_recommendation_wrong": <true or false>,
-    "main_recommendation_reason": "<why, if true>",
-    "confidence_score": <0.0-1.0 overall confidence>
-}}"""
-
-        try:
-            result = self.llm.generate_structured(
-                critique_prompt,
-                output_schema={
-                    "checklist": "array",
-                    "edits": "array",
-                    "gaps": "array",
-                    "main_recommendation_wrong": "boolean",
-                    "main_recommendation_reason": "string",
-                    "confidence_score": "number"
-                },
-                system_prompt=self.EDIT_PROMPT
-            )
-            checklist = [c for c in result.get("checklist") or [] if isinstance(c, dict) and str(c.get("item", "")).strip()]
-            if "error" not in result and checklist:
-                missing = [f"{c['item']}: {c.get('gap') or 'not addressed'}"
-                           for c in checklist if not as_bool(c.get("addressed"), default=True)]
-                # An edit code cannot apply is dropped here; one whose sentence is not found is reported later
-                edits = valid_edits(result.get("edits"))
-                gaps = [g for g in result.get("gaps") or [] if isinstance(g, dict)
-                        and str(g.get("item", "")).strip() and str(g.get("query", "")).strip()][:GAP_LIMIT]
-                wrong = as_bool(result.get("main_recommendation_wrong"), default=False)
-                reason = str(result.get("main_recommendation_reason") or "").strip()
-                return SelfCritiqueResult(
-                    is_complete=not missing,
-                    is_safe=not wrong and not any(e.get("kind") == "harm" for e in edits),
-                    missing_aspects=missing,
-                    concerns=[reason or "no reason given"] if wrong else [],
-                    confidence_score=result.get("confidence_score", 0.5),
-                    checklist=checklist,
-                    edits=edits,
-                    main_recommendation_wrong=wrong,
-                    gaps=gaps
-                )
-        except Exception as e:
-            print(f"Self-critique failed: {e}")
-
-        # A failed critique changes nothing
-        return SelfCritiqueResult(is_complete=True, is_safe=True, confidence_score=0.5)
-
     def should_retry(self, critique: SelfCritiqueResult) -> bool:
         """Determine if the answer should be regenerated."""
-        if self.edits:
-            # Everything else is an edit; only a wrong recommendation as a whole is written again
-            return critique.main_recommendation_wrong
         # Retry if not safe, confidence is very low, or anything the question asks for is missing
         if not critique.is_safe:
             return True
@@ -563,8 +382,6 @@ Respond in JSON format:
 
     def get_improvement_guidance(self, critique: SelfCritiqueResult) -> str:
         """Generate guidance for improving the answer."""
-        if self.edits:
-            return f"The overall recommendation is wrong for this patient: {'; '.join(critique.concerns)}"
         guidance_parts = []
 
         if not critique.is_complete:

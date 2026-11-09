@@ -117,12 +117,6 @@ class SelfCritiqueResult:
     suggestions: List[str] = field(default_factory=list)
     # What the question asks for, each with addressed and gap; is_complete and missing_aspects are derived from it
     checklist: List[Dict[str, Any]] = field(default_factory=list)
-    # Under critic edits (core/critic_edits.py): the sentence edits returned, and whether the whole recommendation
-    # is wrong, the one case that still rewrites the answer
-    edits: List[Dict[str, Any]] = field(default_factory=list)
-    main_recommendation_wrong: bool = False
-    # Items the question asks for that no passage covers, each with a query to search for it
-    gaps: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -140,10 +134,9 @@ class AgentResponse:
     created_at: datetime = field(default_factory=datetime.now)
     # Numbered passages the synthesizer was given; kept out of metadata so the API payload is unchanged
     context_passages: List[Dict[str, Any]] = field(default_factory=list)
-    # Case labels and the evidence scope they produced; also outside metadata, for the same reason
+    # The case labels selected; also outside metadata, for the same reason
     routing: Dict[str, Any] = field(default_factory=dict)
-    # Examples and exact writer requests are separate from citable evidence and the API payload.
-    institutional_examples: Dict[str, Any] = field(default_factory=dict)
+    # Exact writer requests are separate from citable evidence and the API payload
     synthesis_requests: List[Dict[str, str]] = field(default_factory=list)
 
 

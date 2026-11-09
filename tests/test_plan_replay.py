@@ -28,8 +28,7 @@ class PlanReplayTests(unittest.TestCase):
         self.engine = make_engine()
         self.searched = []
         search = self.engine.retriever.execute_task
-        self.engine.retriever.execute_task = lambda task, scope=None: (self.searched.append(task.query),
-                                                                      search(task, scope))[1]
+        self.engine.retriever.execute_task = lambda task: (self.searched.append(task.query), search(task))[1]
 
     def test_saved_plan_is_searched_without_analysis_or_planning(self):
         def refuse(*args, **kwargs):
