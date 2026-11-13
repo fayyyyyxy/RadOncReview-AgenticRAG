@@ -5,6 +5,7 @@ import time
 import uuid
 from typing import List, Dict, Optional, Any
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 from .models import (
     AgentResponse, TaskPlan, QueryAnalysis, Citation,
@@ -17,6 +18,8 @@ from .task_planner import TaskPlanner
 from .retriever import RetrieverManager, MockRetrieverManager
 from .synthesizer import ResponseSynthesizer, SelfCritic
 from .guardrails import GuardrailManager
+from .case_labels import CaseLabels
+from .site_routing import EvidenceScope, scope_for, table_fingerprint
 
 
 class AgenticRAGEngine:
@@ -78,6 +81,18 @@ class AgenticRAGEngine:
         entry = f"[{datetime.now().strftime('%H:%M:%S')}] {step}: {details}"
         self.reasoning_trace.append(entry)
         print(entry)  # Also print for debugging
+
+    def _execute_retrieval_tasks(self, tasks, scope):
+        """Search concurrently, but consume results in plan order before deterministic reranking."""
+        tasks = list(tasks)
+        if not tasks:
+            return
+        workers = min(len(tasks), max(1, self.config.retriever.max_workers))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(self.retriever.execute_task, task, scope) for task in tasks]
+            for task, future in zip(tasks, futures):
+                future.result()
+                self._log_reasoning("RETRIEVE", f"Task '{task.description}': {task.result}")
 
     def _collect_all_chunks(self, plan: TaskPlan) -> List[Dict]:
         """Collect all retrieved chunks from completed tasks."""
@@ -269,12 +284,13 @@ class AgenticRAGEngine:
         return citations
 
 
-    def query(self, user_query: str) -> AgentResponse:
+    def query(self, user_query: str, labels: Optional[CaseLabels] = None) -> AgentResponse:
         """
         Process a user query through the agentic RAG pipeline.
 
         Args:
             user_query: The user's clinical question.
+            labels: Case labels selected by the user; used only when a feature switch asks for them.
 
         Returns:
             AgentResponse with answer, citations, confidence, and reasoning trace.
@@ -326,14 +342,13 @@ class AgenticRAGEngine:
         )
 
         # ========== Step 4: Execute Retrieval Tasks ==========
+        labels = labels or CaseLabels()
+        scope = scope_for(labels.disease_site) if self.config.features.site_filter else EvidenceScope()
+        if scope != EvidenceScope():
+            self._log_reasoning("ROUTE", f"Evidence limited to {labels.disease_site}")
         self._log_reasoning("RETRIEVE", "Executing retrieval tasks")
 
-        for task in plan.sub_tasks:
-            self._log_reasoning("RETRIEVE",
-                f"Task '{task.description}' using {task.retrieval_strategy.value}"
-            )
-            self.retriever.execute_task(task)
-            self._log_reasoning("RETRIEVE", f"Result: {task.result}")
+        self._execute_retrieval_tasks(plan.sub_tasks, scope)
 
         # Collect chunks differently based on query type
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
@@ -354,11 +369,11 @@ class AgenticRAGEngine:
         self._log_reasoning("SYNTHESIZE", "Generating response from retrieved information")
 
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-            answer, citations, confidence = self.synthesizer.synthesize_multi_topic(
+            answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
                 processed_query, analysis, chunks_by_topic
             )
         else:
-            answer, citations, confidence = self.synthesizer.synthesize(
+            answer, citations, confidence, context_passages = self.synthesizer.synthesize(
                 processed_query, analysis, plan, all_chunks
             )
         self._log_reasoning("SYNTHESIZE",
@@ -391,19 +406,18 @@ class AgenticRAGEngine:
                 improved_plan = self.task_planner.replan(plan, guidance)
 
                 # Re-execute new tasks
-                for task in improved_plan.sub_tasks:
-                    if task.status == TaskStatus.PENDING:
-                        self.retriever.execute_task(task)
+                self._execute_retrieval_tasks(
+                    (task for task in improved_plan.sub_tasks if task.status == TaskStatus.PENDING), scope)
 
                 # Re-synthesize — use same path as first attempt based on query type
                 if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
                     chunks_by_topic = self._collect_multi_topic_chunks(improved_plan)
-                    answer, citations, confidence = self.synthesizer.synthesize_multi_topic(
+                    answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
                         processed_query, analysis, chunks_by_topic
                     )
                 else:
                     all_chunks = self._collect_all_chunks(improved_plan)
-                    answer, citations, confidence = self.synthesizer.synthesize(
+                    answer, citations, confidence, context_passages = self.synthesizer.synthesize(
                         processed_query, analysis, improved_plan, all_chunks
                     )
 
@@ -439,6 +453,16 @@ class AgenticRAGEngine:
             reasoning_trace=self.reasoning_trace,
             self_critique=critique,
             task_plan=plan,
+            context_passages=context_passages,
+            routing={
+                "labels": vars(labels),
+                "site_filter": self.config.features.site_filter,
+                "review_note_categories": sorted(scope.review_note_categories)
+                if scope.review_note_categories is not None else None,
+                "trial_paper_folders": sorted(scope.trial_paper_folders)
+                if scope.trial_paper_folders is not None else None,
+                "site_table": table_fingerprint(),
+            },
             metadata={
                 "analysis": {
                     "intent": analysis.intent.value,

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from core.agent import AgenticRAGEngine, create_agent
+from core.case_labels import NOT_SPECIFIED, CaseLabels
 from config import Config, default_config, validate_config
 
 validate_config()
@@ -24,6 +25,11 @@ class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000, description="Clinical question")
     include_reasoning: bool = Field(default=False, description="Include reasoning trace")
     include_citations: bool = Field(default=True, description="Include source citations")
+    # Drop-down choices from core/case_labels.py; used only when a feature switch is on
+    disease_site: str = Field(default=NOT_SPECIFIED, description="Disease site of the case")
+    setting_group: str = Field(default=NOT_SPECIFIED, description="Treatment setting group")
+    prior_rt: str = Field(default=NOT_SPECIFIED, description="Prior radiotherapy")
+    encounter_type: str = Field(default=NOT_SPECIFIED, description="Encounter type")
 
     class Config:
         json_schema_extra = {
@@ -106,8 +112,14 @@ async def query_guidelines(
     request: QueryRequest,
     agent: AgenticRAGEngine = Depends(get_agent)
 ):
+    # Outside the try below, so an invalid choice is a 422 rather than a 500
     try:
-        response = agent.query(request.query)
+        labels = CaseLabels(request.disease_site, request.setting_group, request.prior_rt, request.encounter_type)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        response = agent.query(request.query, labels)
 
         citations = []
         if request.include_citations:
