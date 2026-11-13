@@ -121,6 +121,36 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
   color:var(--text-secondary);cursor:pointer;transition:all .2s;
 }
 .category-tag:hover{background:var(--glass-bg-hover);color:var(--text-primary);border-color:var(--primary)}
+.category-tag.selected{background:rgba(102,126,234,.25);border-color:var(--primary);color:var(--text-primary)}
+.input-context{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--text-secondary);margin:0 4px 8px}
+.input-context .over-limit{color:#f87171}
+.scope-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.scope-controls select,.context-editor textarea{color:var(--text-primary);background:#302950;border:1px solid #77669b;border-radius:8px;padding:6px 8px;font:inherit}
+.scope-controls button,.evidence-action,.source-close,.source-choice{color:inherit;background:transparent;border:1px solid #9284bd;border-radius:8px;padding:5px 9px;cursor:pointer;font:inherit}
+.scope-controls button:disabled{opacity:.45;cursor:default}
+.context-editor{font-size:12px;color:var(--text-secondary);margin:8px 4px}
+.context-editor summary{cursor:pointer;padding:4px 0}
+.context-editor textarea{width:100%;box-sizing:border-box;min-height:86px;resize:vertical;margin-top:6px}
+.context-editor p{margin:5px 0;line-height:1.4}
+.context-editor .over-limit{color:#f87171}
+.inline-citation{color:#c4b5fd;background:rgba(167,139,250,.12);border:1px solid #8b79b4;border-radius:5px;padding:0 4px;font:inherit;cursor:pointer}
+.evidence-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.source-inspector{position:fixed;right:0;top:0;bottom:0;width:410px;max-width:100vw;z-index:60;background:#241f40;border-left:1px solid #77669b;box-shadow:-8px 0 30px #0004;padding:20px;box-sizing:border-box;overflow-y:auto;color:#f3f0ff}
+.source-inspector[hidden]{display:none}
+.source-inspector header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px}
+.source-inspector h2{font-size:18px;margin:0}
+.source-inspector p{font-size:12px;color:#c3bbd6;line-height:1.5}
+.source-choices{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+.source-choice[aria-pressed=true]{background:#66518e}
+.source-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.7;border-top:1px solid #77669b;padding-top:16px}
+.source-inspector a{color:#c4b5fd}
+@media(min-width:1150px){body.evidence-open .app{margin-right:410px}}
+@media(max-width:1149px){.source-inspector{top:auto;width:100%;max-height:65vh;border-top:1px solid #77669b;border-radius:18px 18px 0 0}.input-context{flex-wrap:wrap}}
+.evaluation-option{display:flex;align-items:center;gap:8px;margin:8px 4px 0;font-size:12px;color:var(--text-secondary)}
+.evaluation-option input{accent-color:var(--primary)}
+.evidence-warning{margin-bottom:12px;padding:12px 14px;border:1px solid #fbbf24;border-radius:var(--radius-xs);background:rgba(251,191,36,.12);color:#fde68a;font-size:13px;line-height:1.6}
+.evidence-warning strong{display:block;color:#fde68a;margin-bottom:4px}
+.thinking-text{white-space:normal}
 
 .sidebar-footer{margin-top:auto;padding-top:20px;border-top:1px solid var(--glass-border)}
 .status-indicator{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary)}
@@ -295,6 +325,12 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
 .citation-item:last-child{border-bottom:none}
 .citation-path{color:var(--accent);font-weight:500;margin-bottom:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .citation-score{color:var(--text-muted);font-size:11px}
+/* Statements whose citation the passages did not support (core/citation_check.py) */
+.uncited{text-decoration:underline dotted rgba(251,191,36,0.75);text-underline-offset:3px;cursor:help}
+.uncited-badge{background:rgba(251,191,36,0.1);color:#fbbf24;border:1px solid rgba(251,191,36,0.25);cursor:pointer}
+.uncited-badge:hover{background:rgba(251,191,36,0.18)}
+.uncited-item{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.05);font-size:12px;color:var(--text-secondary);line-height:1.5}
+.uncited-item:last-child{border-bottom:none}
 .citation-excerpt{color:var(--text-secondary);margin-top:4px;line-height:1.5;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
 }
@@ -500,8 +536,9 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
     </div>
 
     <div class="sidebar-section">
-      <div class="sidebar-section-title">Disease Categories</div>
+      <div class="sidebar-section-title">Search Category</div>
       <div class="category-tags" id="categoryTags"></div>
+      <p style="font-size:11px;color:var(--text-secondary);margin-top:8px">Select where to search. This does not send a question.</p>
     </div>
 
     <div class="sidebar-footer">
@@ -562,33 +599,56 @@ body{background:linear-gradient(135deg,#0f0c29 0%,#302b63 50%,#24243e 100%);posi
     </div>
 
     <div class="input-area">
+      <div class="input-context"><div class="scope-controls"><label for="searchScope">Search</label><select id="searchScope" onchange="app.selectScope(this.value)"><option value="Not specified">All sources</option></select><button id="resetScope" type="button" onclick="app.selectScope(ALL_SOURCES)" disabled>All sources</button></div><span id="queryLength">0 / 2,000</span></div>
+      <details class="context-editor" id="contextEditor"><summary id="contextSummary">Case context · empty — edit</summary><p id="contextHelp">Earlier questions are kept here after a successful answer. Edit to preserve corrections or remove old details. Saved in this browser for this chat; no extra AI call.</p><textarea id="caseContext" aria-label="Remembered case context" aria-describedby="contextHelp contextLength" oninput="app.editContext(this.value)"></textarea><p id="contextLength">0 / 4,000 characters</p></details>
       <div class="input-container">
-        <textarea id="queryInput" rows="1" placeholder="Ask a radiation oncology question..." onkeydown="app.handleKeyDown(event)" oninput="app.autoResize(this)"></textarea>
+        <textarea id="queryInput" rows="1" aria-label="Clinical question" placeholder="Ask a radiation oncology question..." onkeydown="app.handleKeyDown(event)" oninput="app.autoResize(this)"></textarea>
         <button class="btn-send" id="btnSend" onclick="app.send()" title="Send">
           <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
         </button>
       </div>
+      <label class="evaluation-option"><input type="checkbox" id="runEvaluation">Extra quality review (adds waiting time)</label>
       <div class="input-hint">Press Enter to send, Shift + Enter for new line · AI responses based on clinical guidelines are for reference only</div>
+      <div class="input-hint">Follow-ups use the case context above. New Chat starts fresh. Changing search scope keeps the same case.</div>
     </div>
   </main>
 </div>
 
 <div class="toast" id="toast"></div>
+<aside id="sourceInspector" class="source-inspector" aria-label="Supporting evidence" hidden>
+  <header><h2>Supporting evidence</h2><button class="source-close" type="button" onclick="app.closeEvidence()" aria-label="Close supporting evidence">Close ✕</button></header>
+  <p id="sourceQuestion"></p><div id="sourceChoices" class="source-choices"></div><h3 id="sourceTitle"></h3><a id="sourceLink" target="_blank" rel="noopener noreferrer" hidden>Open source document ↗</a><p id="sourceNote"></p><div id="sourceText" class="source-text" tabindex="0"></div>
+</aside>
 
 <script>
-const CATEGORIES = [
-  {id:'breast',name:'Breast'},{id:'brain_mets',name:'Brain Mets'},
-  {id:'thorax',name:'Thorax'},{id:'hematologic',name:'Hematologic'},
-  {id:'cns',name:'CNS'},{id:'gi',name:'Gastrointestinal'},
-  {id:'gu',name:'Genitourinary'},{id:'gyn',name:'Gynecology'},
-  {id:'head_neck',name:'Head & Neck'},{id:'skin',name:'Skin'},
-  {id:'sarcoma',name:'Sarcoma'},{id:'pediatrics',name:'Pediatrics'},
-];
+const ALL_SOURCES = 'Not specified';
+const PROGRESS_LABELS = {
+  queued: 'Waiting for the current request to finish…',
+  initialize: 'Preparing the evidence search…',
+  input: 'Checking your question and earlier context…',
+  analyze: 'Understanding your clinical question…',
+  plan: 'Planning the evidence searches…',
+  retrieve: 'Searching guidelines and trial papers, then ranking passages…',
+  synthesize: 'Writing an answer from the retrieved evidence…',
+  critique: 'Reviewing completeness and safety…',
+  refine: 'Finding additional evidence and improving the answer…',
+  citations: 'Checking statements against their cited passages…',
+  safety: 'Performing final output checks…',
+  evidence: 'Checking whether the evidence sufficiently supports the answer…',
+  evaluate: 'Running the additional quality assessments…',
+  complete: 'Preparing your checked answer…'
+};
 
 class ChatApp {
   constructor() {
     this.messages = [];
-    this.isLoading = false;
+    this.pending = new Map();
+    this.drafts = new Map();
+    this.caseContext = '';
+    this.contextRevision = 0;
+    this.sourceRegistry = new Map();
+    this.categories = [];
+    this.selectedSite = ALL_SOURCES;
     this.apiKey = 'YOUR_API_KEY';
     this.sidebarOpen = window.innerWidth > 768;
     this.conversations = {};
@@ -602,6 +662,7 @@ class ChatApp {
   init() {
     this.loadConversations();
     this.renderCategories();
+    this.loadOptions();
     this.renderHistory();
     this.checkHealth();
     if (this.currentConvId && this.conversations[this.currentConvId]) {
@@ -611,6 +672,8 @@ class ChatApp {
     document.getElementById('sidebarOverlay').addEventListener('click', () => this.toggleSidebar());
     document.getElementById('messages').addEventListener('wheel', () => { this.userScrolled = true; });
     document.getElementById('messages').addEventListener('touchmove', () => { this.userScrolled = true; });
+    this.progressTimer = setInterval(() => this.updateThinking(), 1000);
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') this.closeEvidence(); });
   }
 
   generateId() {
@@ -629,17 +692,24 @@ class ChatApp {
     try {
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.conversations));
       if (this.currentConvId) localStorage.setItem(this.CURRENT_KEY, this.currentConvId);
-    } catch {}
+      this.storageFailed = false;
+    } catch {
+      if (!this.storageFailed) this.showToast('Browser history could not be saved. Your current chat is still open; free browser storage before closing it.');
+      this.storageFailed = true;
+    }
   }
 
   saveCurrentConversation() {
-    if (!this.currentConvId || this.messages.length === 0) return;
+    if (!this.currentConvId || (!this.messages.length && !this.caseContext)) return;
     const firstUserMsg = this.messages.find(m => m.role === 'user');
     const title = firstUserMsg ? firstUserMsg.content.substring(0, 60) : 'New Chat';
     this.conversations[this.currentConvId] = {
       id: this.currentConvId,
       title,
       messages: this.messages.map(m => ({...m})),  // snapshot, not reference
+      diseaseSite: this.selectedSite,
+      caseContext: this.caseContext || '',
+      contextRevision: this.contextRevision || 0,
       updatedAt: Date.now(),
       createdAt: this.conversations[this.currentConvId]?.createdAt || Date.now()
     };
@@ -694,23 +764,8 @@ class ChatApp {
 
   switchConversation(id) {
     if (id === this.currentConvId) return;
-    // Save current conversation only if it's not the target
-    // (to avoid overwriting a pending response that was saved there)
-    if (this.currentConvId && this.messages.length > 0) {
-      const firstUserMsg = this.messages.find(m => m.role === 'user');
-      const title = firstUserMsg ? firstUserMsg.content.substring(0, 60) : 'New Chat';
-      const existing = this.conversations[this.currentConvId];
-      // Only overwrite if our current messages are newer (more messages)
-      if (!existing || this.messages.length >= existing.messages.length) {
-        this.conversations[this.currentConvId] = {
-          id: this.currentConvId,
-          title,
-          messages: this.messages.map(m => ({...m})),
-          updatedAt: Date.now(),
-          createdAt: existing?.createdAt || Date.now()
-        };
-      }
-    }
+    if (this.currentConvId) this.drafts.set(this.currentConvId, document.getElementById('queryInput').value);
+    this.saveCurrentConversation();
     this.currentConvId = id;
     localStorage.setItem(this.CURRENT_KEY, id);
     this.restoreConversation(id);
@@ -722,6 +777,18 @@ class ChatApp {
     const conv = this.conversations[id];
     if (!conv) return;
     this.messages = conv.messages.map(m => ({...m}));
+    this.closeEvidence();
+    this.sourceRegistry.clear();
+    // Migrate every earlier answered question; never silently drop an intermediate correction.
+    this.caseContext = conv.caseContext ?? this.answeredQuestions().join('\n\n');
+    this.contextRevision = conv.contextRevision || 0;
+    this.renderContext();
+    this.selectedSite = conv.diseaseSite || ALL_SOURCES;
+    this.renderCategories();
+    const input = document.getElementById('queryInput');
+    input.value = this.drafts.get(id) || '';
+    this.autoResize(input);
+    document.getElementById('btnSend').disabled = this.pending.has(id);
     const container = document.getElementById('messages');
     container.innerHTML = '';
 
@@ -735,17 +802,31 @@ class ChatApp {
         this.renderUserBubble(container, msg.content, msg.time);
       } else if (msg.role === 'assistant') {
         this.renderAssistantBubble(container, msg.data, msg.time);
+      } else if (msg.role === 'error') {
+        this.addErrorMessage(msg.content);
       }
     }
+    if (this.pending.has(id)) this.showThinking();
     this.scrollToBottom();
   }
 
   deleteConversation(id) {
     delete this.conversations[id];
+    this.drafts.delete(id);
     if (this.currentConvId === id) {
       this.currentConvId = null;
       localStorage.removeItem(this.CURRENT_KEY);
       this.messages = [];
+      this.caseContext = '';
+      this.contextRevision = 0;
+      this.renderContext();
+      this.closeEvidence();
+      this.sourceRegistry.clear();
+      this.selectedSite = ALL_SOURCES;
+      this.renderCategories();
+      document.getElementById('queryInput').value = '';
+      this.autoResize(document.getElementById('queryInput'));
+      document.getElementById('btnSend').disabled = false;
       const container = document.getElementById('messages');
       container.innerHTML = '';
       this.renderWelcome(container);
@@ -756,9 +837,62 @@ class ChatApp {
 
   renderCategories() {
     const container = document.getElementById('categoryTags');
-    container.innerHTML = CATEGORIES.map(c =>
-      `<span class="category-tag" onclick="app.askQuestion('Overview of radiation therapy guidelines for ${c.name}')">${c.name}</span>`
-    ).join('');
+    container.innerHTML = '';
+    for (const site of [ALL_SOURCES, ...this.categories]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'category-tag' + (site === this.selectedSite ? ' selected' : '');
+      button.textContent = site === ALL_SOURCES ? 'All sources' : site;
+      button.setAttribute('aria-pressed', String(site === this.selectedSite));
+      button.addEventListener('click', () => {
+        this.selectScope(site);
+      });
+      container.appendChild(button);
+    }
+    const select = document.getElementById('searchScope');
+    select.innerHTML = '';
+    for (const site of [...new Set([ALL_SOURCES, ...this.categories, this.selectedSite])]) {
+      const option = document.createElement('option');
+      option.value = site; option.textContent = site === ALL_SOURCES ? 'All sources' : site;
+      select.appendChild(option);
+    }
+    select.value = this.selectedSite;
+    document.getElementById('resetScope').disabled = this.selectedSite === ALL_SOURCES;
+  }
+
+  selectScope(site) {
+    if (site !== ALL_SOURCES && !this.categories.includes(site)) return;
+    this.selectedSite = site;
+    this.renderCategories();
+    this.saveCurrentConversation();
+  }
+
+  renderContext() {
+    const text = this.caseContext || '';
+    document.getElementById('caseContext').value = text;
+    document.getElementById('contextSummary').textContent = text ? `Case context · ${text.length.toLocaleString()} characters — edit` : 'Case context · empty — edit';
+    const counter = document.getElementById('contextLength');
+    counter.textContent = `${text.length.toLocaleString()} / 4,000 characters` + (text.length > 4000 ? ' — shorten before sending' : '');
+    counter.classList.toggle('over-limit', text.length > 4000);
+  }
+
+  editContext(text) {
+    this.caseContext = text;
+    this.contextRevision = (this.contextRevision || 0) + 1;
+    if (!this.currentConvId) this.currentConvId = this.generateId();
+    this.renderContext();
+    this.saveCurrentConversation();
+  }
+
+  async loadOptions() {
+    try {
+      const response = await fetch('/options');
+      if (!response.ok) throw new Error('Categories unavailable');
+      this.categories = (await response.json()).disease_sites;
+      this.renderCategories();
+    } catch {
+      this.showToast('Search categories could not load. All-source search is still available.');
+    }
   }
 
   async checkHealth() {
@@ -789,10 +923,22 @@ class ChatApp {
   }
 
   newChat() {
+    if (this.currentConvId) this.drafts.set(this.currentConvId, document.getElementById('queryInput').value);
     this.saveCurrentConversation();
     this.currentConvId = this.generateId();
-    localStorage.setItem(this.CURRENT_KEY, this.currentConvId);
+    this.saveConversations();
     this.messages = [];
+    this.caseContext = '';
+    this.contextRevision = 0;
+    this.renderContext();
+    this.closeEvidence();
+    this.sourceRegistry.clear();
+    document.getElementById('runEvaluation').checked = false;
+    this.selectedSite = ALL_SOURCES;
+    this.renderCategories();
+    document.getElementById('queryInput').value = '';
+    this.autoResize(document.getElementById('queryInput'));
+    document.getElementById('btnSend').disabled = false;
     const container = document.getElementById('messages');
     container.innerHTML = '';
     this.renderWelcome(container);
@@ -846,17 +992,43 @@ class ChatApp {
   autoResize(el) {
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+    const counter = document.getElementById('queryLength');
+    counter.textContent = `${el.value.length.toLocaleString()} / 2,000`;
+    counter.classList.toggle('over-limit', el.value.length > 2000);
   }
 
-  async send() {
+  answeredQuestions() {
+    const questions = [];
+    for (let i = 0; i < this.messages.length - 1; i++) {
+      const message = this.messages[i];
+      const reply = this.messages[i + 1];
+      if (message.role === 'user' && reply.role === 'assistant' && !reply.data?.metadata?.input_blocked) questions.push(message.content);
+    }
+    return questions;
+  }
+
+  async send(override = null) {
     const input = document.getElementById('queryInput');
-    const query = input.value.trim();
-    if (!query || this.isLoading) return;
+    const query = override?.query ?? input.value.trim();
+    if (!query || this.pending.has(this.currentConvId)) return;
+    if (query.length > 2000) {
+      this.showToast('Please shorten your question to 2,000 characters. Your text has been kept.');
+      return;
+    }
+    const context = override?.context ?? this.caseContext ?? '';
+    const contextRevision = this.contextRevision || 0;
+    if (context.length > 4000) {
+      document.getElementById('contextEditor').open = true;
+      document.getElementById('caseContext').focus();
+      this.showToast('Shorten the case context to 4,000 characters before sending. No details have been removed.');
+      return;
+    }
+    const diseaseSite = override?.diseaseSite ?? this.selectedSite;
+    const runEvaluation = document.getElementById('runEvaluation').checked === true;
 
     this.userScrolled = false;
-    input.value = '';
-    input.style.height = 'auto';
-    this.isLoading = true;
+    if (!override) input.value = '';
+    this.autoResize(input);
     document.getElementById('btnSend').disabled = true;
 
     const welcome = document.getElementById('welcome');
@@ -865,15 +1037,45 @@ class ChatApp {
     // Ensure currentConvId is initialized before recording sentConvId
     if (!this.currentConvId) this.currentConvId = this.generateId();
     const sentConvId = this.currentConvId;
+    this.drafts.delete(sentConvId);
+    this.pending.set(sentConvId, {stage: 'queued', startedAt: Date.now()});
 
     this.addUserMessage(query);
+    this.messages.at(-1).diseaseSite = diseaseSite;
+    this.saveCurrentConversation();
     this.showThinking();
 
     try {
-      const data = await this.callAPI(query);
-      this.removeThinking();
+      const started = performance.now();
+      const stageTimes = {};
+      const data = await this.callAPI(query, diseaseSite, [], stage => {
+        stageTimes[stage] ??= Math.round(performance.now() - started);
+        const request = this.pending.get(sentConvId);
+        if (request) request.stage = stage;
+        if (this.currentConvId === sentConvId) this.updateThinking();
+      }, runEvaluation, context);
+      data.client_timing = {checked_answer_ms: Math.round(performance.now() - started), stage_arrival_ms: stageTimes};
+      data.client_request = {context, diseaseSite};
+      // Do not overwrite edits made while the request was running.
+      const conv = this.conversations[sentConvId];
+      const remembered = this.currentConvId === sentConvId ? (this.caseContext || '') : conv?.caseContext;
+      const revision = this.currentConvId === sentConvId ? (this.contextRevision || 0) : (conv?.contextRevision || 0);
+      if (!data.metadata?.input_blocked && remembered === context && revision === contextRevision && !override) {
+        const next = [context, query].filter(Boolean).join('\n\n');
+        if (conv) { conv.caseContext = next; conv.contextRevision = contextRevision + 1; }
+        if (this.currentConvId === sentConvId) {
+          this.caseContext = next;
+          this.contextRevision = contextRevision + 1;
+          this.renderContext();
+          if (next.length > 4000) {
+            document.getElementById('contextEditor').open = true;
+            this.showToast('Case context is full. Edit it before your next follow-up; all details are still visible.');
+          }
+        }
+      }
 
       if (this.currentConvId === sentConvId) {
+        this.removeThinking();
         // Still on same chat — render normally
         this.addAssistantMessage(data);
       } else {
@@ -889,32 +1091,67 @@ class ChatApp {
         }
       }
     } catch (err) {
-      this.removeThinking();
-      this.addErrorMessage(err.message || 'Request failed. Please check if the backend service is running.');
+      const error = err.message || 'The request could not finish. Please try again.';
+      const message = {role: 'error', content: error, time: this.formatTime()};
+      if (this.currentConvId === sentConvId) {
+        this.removeThinking();
+        this.messages.push(message);
+        this.addErrorMessage(error);
+        this.saveCurrentConversation();
+        if (!input.value) { input.value = query; this.autoResize(input); }
+      } else if (this.conversations[sentConvId]) {
+        this.conversations[sentConvId].messages.push(message);
+        this.saveConversations();
+      }
+      if (this.conversations[sentConvId] && !this.drafts.get(sentConvId)) this.drafts.set(sentConvId, query);
     } finally {
-      this.isLoading = false;
-      document.getElementById('btnSend').disabled = false;
-      input.focus();
+      this.pending.delete(sentConvId);
+      if (this.currentConvId === sentConvId) {
+        this.removeThinking();
+        document.getElementById('btnSend').disabled = false;
+        input.focus();
+      }
     }
   }
 
-  async callAPI(query) {
-    const resp = await fetch('/query', {
+  async callAPI(query, diseaseSite, priorQuestions, onProgress, runEvaluation = false, context = '') {
+    const resp = await fetch('/query/stream', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-API-Key': this.apiKey},
-      body: JSON.stringify({query, include_reasoning: true, include_citations: true})
+      body: JSON.stringify({query, disease_site: diseaseSite,
+        filter_by_site: diseaseSite !== ALL_SOURCES, prior_questions: priorQuestions,
+        run_evaluation: runEvaluation,
+        conversation_context: context,
+        include_reasoning: true, include_citations: true})
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${resp.status}`);
+      throw new Error(typeof err.detail === 'string' ? err.detail : 'The request could not be processed. Check your question and try again.');
     }
-    return resp.json();
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const {value, done} = await reader.read();
+      buffer += decoder.decode(value, {stream: !done});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      if (done && buffer.trim()) { lines.push(buffer); buffer = ''; }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.type === 'progress') onProgress(event.stage);
+        if (event.type === 'result') return event.data;
+        if (event.type === 'error') throw new Error(event.message);
+      }
+      if (done) throw new Error('The connection ended before the answer arrived. Your question has been kept.');
+    }
   }
 
   addUserMessage(text) {
     if (!this.currentConvId) this.currentConvId = this.generateId();
     const ts = this.formatTime();
-    this.messages.push({role: 'user', content: text, time: ts});
+    this.messages.push({role: 'user', content: text, diseaseSite: this.selectedSite, time: ts});
     const container = document.getElementById('messages');
     this.renderUserBubble(container, text, ts);
     this.scrollToBottom();
@@ -934,18 +1171,33 @@ class ChatApp {
   }
 
   showThinking() {
+    this.removeThinking();
     const container = document.getElementById('messages');
     const div = document.createElement('div');
     div.className = 'thinking';
+    div.setAttribute('role', 'status');
     div.id = 'thinkingIndicator';
     div.innerHTML = `
       <div class="message-avatar"><svg viewBox="0 0 24 24"><path fill="white" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg></div>
       <div class="thinking-bubble">
         <div class="thinking-dots"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>
-        <span class="thinking-text">Analyzing query and retrieving relevant guidelines...</span>
+        <span class="thinking-text" id="thinkingText"></span>
+        <span id="thinkingElapsed" aria-hidden="true" style="font-size:11px;color:var(--text-secondary)"></span>
       </div>`;
     container.appendChild(div);
+    this.updateThinking();
     this.scrollToBottom();
+  }
+
+  updateThinking() {
+    const request = this.pending.get(this.currentConvId);
+    const label = document.getElementById('thinkingText');
+    if (!request || !label) return;
+    const seconds = Math.floor((Date.now() - request.startedAt) / 1000);
+    const text = PROGRESS_LABELS[request.stage] || 'Processing your question…';
+    if (label.textContent !== text) label.textContent = text;
+    const elapsed = document.getElementById('thinkingElapsed');
+    if (elapsed) elapsed.textContent = `${seconds}s elapsed`;
   }
 
   removeThinking() {
@@ -966,6 +1218,7 @@ class ChatApp {
     const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4);
     const div = document.createElement('div');
     div.className = 'message assistant';
+    this.sourceRegistry.set(msgId, data);
 
     let citationsHTML = '';
     if (data.citations && data.citations.length > 0) {
@@ -977,7 +1230,7 @@ class ChatApp {
             const badge = c.source_type === 'clinical_trial'
               ? `<span class="citation-type-badge trial">Clinical Trial</span>`
               : `<span class="citation-type-badge notes">Review Notes</span>`;
-            const titleHTML = c.source_url
+            const titleHTML = this.safeSourceURL(c.source_url)
               ? `<a href="${this.escapeHtml(c.source_url)}" target="_blank" rel="noopener" class="citation-link">${this.escapeHtml(title)}</a>`
               : this.escapeHtml(title);
             return `
@@ -985,8 +1238,19 @@ class ChatApp {
               <div class="citation-path">[${c.citation_id}] ${titleHTML} ${badge}</div>
               <div class="citation-score">Relevance: ${(c.relevance_score * 100).toFixed(0)}%</div>
               ${c.excerpt ? `<div class="citation-excerpt">${this.escapeHtml(c.excerpt)}</div>` : ''}
+              <button class="evidence-action" type="button" onclick="app.openEvidence('${msgId}',${Number(c.citation_id)})">View supporting passage</button>
             </div>`;
           }).join('')}
+        </div>`;
+    }
+
+    const uncited = data.metadata?.citation_check?.uncited_sentences || [];
+    let uncitedHTML = '';
+    if (uncited.length > 0) {
+      uncitedHTML = `
+        <div class="citations-panel" id="uncited-${msgId}">
+          <div class="citations-header">Not found in the retrieved sources (${uncited.length})</div>
+          ${uncited.map(s => `<div class="uncited-item">${this.escapeHtml(s)}</div>`).join('')}
         </div>`;
     }
 
@@ -1008,34 +1272,147 @@ class ChatApp {
     div.innerHTML = `
       <div class="message-avatar"><svg viewBox="0 0 24 24"><path fill="white" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg></div>
       <div class="message-content">
+        ${this.renderEvidenceWarning(data, msgId)}
         <div class="message-bubble" id="bubble-${msgId}"></div>
         <div class="message-meta">
-          <span class="meta-badge latency-badge">${data.latency_ms?.toFixed(0) ?? '—'}ms</span>
-          ${data.citations?.length ? `<span class="meta-badge citations-badge" onclick="app.togglePanel('cit-${msgId}')">${data.citations.length} citation${data.citations.length > 1 ? 's' : ''}</span>` : ''}
+          <span class="meta-badge latency-badge" title="${data.client_timing ? 'Time from sending your question until the checked answer reached this browser, including queue and network.' : 'Server processing time; older answers may exclude evaluation.'}">${(data.client_timing?.checked_answer_ms ?? data.latency_ms) != null ? ((data.client_timing?.checked_answer_ms ?? data.latency_ms) / 1000).toFixed(1) + 's' : '—'}</span>
+          ${data.citations?.length ? `<button class="meta-badge citations-badge" onclick="app.openEvidence('${msgId}')">${data.citations.length} citation${data.citations.length > 1 ? 's' : ''}</button>` : ''}
+          ${uncited.length ? `<span class="meta-badge uncited-badge" onclick="app.togglePanel('uncited-${msgId}')" title="Statements whose cited passage did not support them">${uncited.length} unsourced</span>` : ''}
           ${data.reasoning_trace?.length ? `<span class="meta-badge citations-badge" onclick="app.togglePanel('reason-${msgId}')">Reasoning</span>` : ''}
-          ${data.metadata?.judge_evaluations?.length > 0 ? (() => {
-            const ev = data.metadata.judge_evaluations[0];
-            const composite = ev.composite_score ?? ev.overall_score ?? 0;
-            const triggered = ev.abstention_triggered;
-            const scoreClass = triggered ? 'abstain' : composite >= 4.0 ? '' : composite >= 3.0 ? 'good' : 'poor';
-            const scoreLabel = triggered ? 'Abstained' : composite >= 4.0 ? 'Good' : composite >= 3.0 ? 'Fair' : 'Poor';
-            return `<span class="meta-badge score-badge ${scoreClass}" onclick="app.toggleJudge('judge-${msgId}')">🎯 Score: ${composite.toFixed(2)}/5 (${scoreLabel})</span>`;
-          })() : ''}
+          ${data.metadata?.judge_evaluations?.length ? `<button class="meta-badge citations-badge" onclick="app.toggleJudge('judge-${msgId}')">Quality review details</button>` : ''}
           <button class="btn-copy" onclick="app.copyAnswer('${msgId}')" title="Copy">
             <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
         </div>
-        ${citationsHTML}${reasoningHTML}${judgeHTML}
+        ${citationsHTML}${uncitedHTML}${reasoningHTML}${judgeHTML}
         <div class="message-time">${ts}</div>
       </div>`;
     container.appendChild(div);
 
     const bubble = document.getElementById(`bubble-${msgId}`);
+    const answer = this.markUncited(data.answer, uncited);
     if (animate) {
-      this.typeWriter(bubble, data.answer);
+      this.typeWriter(bubble, answer);
     } else {
-      bubble.innerHTML = marked.parse(data.answer);
+      bubble.innerHTML = marked.parse(answer);
     }
+    this.linkCitations(bubble, msgId, data.citations || []);
+  }
+
+  renderEvidenceWarning(data, msgId) {
+    const check = data.metadata?.evidence_check;
+    const legacyFlag = data.metadata?.judge_evaluations?.some(ev => ev.abstention_triggered || ev.should_abstain === 'Yes');
+    const scope = data.metadata?.search_scope?.disease_site;
+    const actions = msgId ? `<div class="evidence-actions"><button class="evidence-action" type="button" onclick="app.openEvidence('${msgId}')">Review retrieved evidence</button>${scope && scope !== ALL_SOURCES ? `<button class="evidence-action" type="button" title="Repeat this question with its original case context using All sources" onclick="app.searchAllSources('${msgId}')">Search all sources</button>` : ''}</div>` : '';
+    if (check?.status === 'unavailable') {
+      return `<div class="evidence-warning" role="note"><strong>Evidence check unavailable</strong>The automated evidence check could not finish. The evidence supporting this answer has not been assessed. Review the cited sources before relying on it.${actions}</div>`;
+    }
+    if (!check?.flagged && !legacyFlag) return '';
+    const partial = check?.judgment === 'Partial Abstention Preferred';
+    const title = partial ? 'Some statements may lack sufficient evidence' : 'Insufficient evidence flagged';
+    const reason = check?.reason ? `<p>${this.escapeHtml(check.reason)}</p>` : '';
+    return `<div class="evidence-warning" role="note"><strong>${title}</strong>${reason}<p>The automated review found limited support in the retrieved sources. Review the evidence before relying on this answer.</p>${actions}</div>`;
+  }
+
+  safeSourceURL(value) {
+    try { return ['https:', 'http:'].includes(new URL(value).protocol) ? value : null; }
+    catch { return null; }
+  }
+
+  linkCitations(bubble, msgId, citations) {
+    const ids = new Set(citations.map(c => Number(c.citation_id)));
+    const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node.parentElement.closest('a,button,pre,code,script,style') && /\[\d+(?:\s*,\s*\d+)*\]/.test(node.textContent)) nodes.push(node);
+    }
+    for (const node of nodes) {
+      const fragment = document.createDocumentFragment();
+      const text = node.textContent;
+      let start = 0;
+      for (const match of text.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
+        fragment.appendChild(document.createTextNode(text.slice(start, match.index)));
+        const numbers = match[1].split(',').map(Number);
+        numbers.forEach((id, i) => {
+          if (i) fragment.appendChild(document.createTextNode(' '));
+          if (!ids.has(id)) { fragment.appendChild(document.createTextNode(`[${id}]`)); return; }
+          const button = document.createElement('button');
+          button.type = 'button'; button.className = 'inline-citation'; button.textContent = `[${id}]`;
+          button.setAttribute('aria-label', `Read supporting passage ${id}`);
+          button.addEventListener('click', () => this.openEvidence(msgId, id));
+          fragment.appendChild(button);
+        });
+        start = match.index + match[0].length;
+      }
+      fragment.appendChild(document.createTextNode(text.slice(start)));
+      node.replaceWith(fragment);
+    }
+  }
+
+  openEvidence(msgId, citationId = null) {
+    const data = this.sourceRegistry.get(msgId);
+    if (!data) return;
+    if (document.getElementById('sourceInspector').hidden) this.evidenceFocus = document.activeElement;
+    const passages = data.evidence_passages?.length ? data.evidence_passages : (data.citations || []).map(c => ({...c, text: c.excerpt, excerpt_only: true}));
+    const passage = passages.find(p => Number(p.citation_id) === Number(citationId)) || passages[0];
+    document.getElementById('sourceInspector').hidden = false;
+    document.body.classList.add('evidence-open');
+    document.getElementById('sourceQuestion').textContent = data.query || 'Evidence retrieved for this answer';
+    const choices = document.getElementById('sourceChoices');
+    choices.innerHTML = '';
+    for (const p of passages) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'source-choice';
+      button.textContent = `[${p.citation_id}]`;
+      button.setAttribute('aria-label', `Show passage ${p.citation_id}`);
+      button.setAttribute('aria-pressed', String(p === passage));
+      button.addEventListener('click', () => this.openEvidence(msgId, p.citation_id));
+      choices.appendChild(button);
+    }
+    const citation = (data.citations || []).find(c => Number(c.citation_id) === Number(passage?.citation_id));
+    document.getElementById('sourceTitle').textContent = citation?.document_title || passage?.source_path || 'No retrieved passages available';
+    const link = document.getElementById('sourceLink');
+    const url = this.safeSourceURL(citation?.source_url);
+    link.hidden = !url; link.href = url || '';
+    document.getElementById('sourceNote').textContent = passage ? (passage.excerpt_only ? 'Older saved answer: only a short excerpt is available. Open the source document for more detail.' : 'Full retrieved passage provided to the answer writer. This is a passage from the source, not the entire document.') : 'This answer has no saved evidence passages. Try a new search to inspect its supporting evidence.';
+    document.getElementById('sourceText').textContent = passage?.text || '';
+    document.getElementById('sourceText').scrollTop = 0;
+    document.getElementById('sourceText').focus({preventScroll: true});
+    document.getElementById('sourceInspector').scrollTop = 0;
+  }
+
+  closeEvidence() {
+    const panel = document.getElementById('sourceInspector');
+    if (!panel || panel.hidden) return;
+    panel.hidden = true;
+    document.body.classList.remove('evidence-open');
+    if (this.evidenceFocus?.isConnected) this.evidenceFocus.focus();
+  }
+
+  searchAllSources(msgId) {
+    const data = this.sourceRegistry.get(msgId);
+    if (!data?.query || this.pending.has(this.currentConvId)) return;
+    if (!data.client_request) {
+      this.showToast('This older answer has no saved request context. Restate the question with All sources selected.');
+      return;
+    }
+    this.selectScope(ALL_SOURCES);
+    this.closeEvidence();
+    return this.send({query: data.query, context: data.client_request.context, diseaseSite: ALL_SOURCES});
+  }
+
+  // Underlines each statement the citation check left without a source; the panel lists them all regardless
+  markUncited(answer, sentences) {
+    let text = answer;
+    for (const sentence of sentences) {
+      // ⚠️ A list or heading marker stays outside the span, or the markdown list or heading would break
+      const core = sentence.replace(/^\s*(?:[-*+]|\d+[.)]|#{1,6})\s+/, '');
+      // Only a single exact match is marked, and never a table row
+      if (!core || core.includes('|') || text.split(core).length !== 2) continue;
+      // 💡 A replacer function inserts the text as is; a replacement string would treat "$&" or "$1" specially
+      text = text.replace(core, () => `<span class="uncited" title="Not found in the retrieved sources">${core}</span>`);
+    }
+    return text;
   }
 
   renderJudgePanel(evaluations, msgId) {
@@ -1099,7 +1476,7 @@ class ChatApp {
       <div class="message-content">
         <div class="message-bubble" style="border-color:rgba(248,113,113,0.2)">
           <p style="color:#f87171">${this.escapeHtml(errorText)}</p>
-          <p style="font-size:12px;color:var(--text-secondary)">Please ensure the backend service is running: <code>python api.py</code></p>
+          <p style="font-size:12px;color:var(--text-secondary)">Your question is saved in this chat. You can edit it and send it again.</p>
         </div>
       </div>`;
     container.appendChild(div);

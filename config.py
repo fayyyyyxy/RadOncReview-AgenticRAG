@@ -107,7 +107,7 @@ class GuardrailConfig:
 
 @dataclass
 class FeatureConfig:
-    """Switches for evaluated changes; all off by default, so the web app keeps today's behaviour."""
+    """Defaults for citation checking and disease-site routing."""
     citation_check: bool = True
     site_filter: bool = False  # limit evidence to the user-selected disease site (core/site_routing.py)
 

@@ -4,7 +4,7 @@
 
 Radiation oncology treatment decisions are grounded in a rapidly evolving body of clinical evidence — hundreds of trials, institutional guidelines, and disease-site protocols that are difficult to synthesize quickly at the point of care. Clinicians need fast, reliable access to this evidence to support treatment planning and patient communication, yet existing tools rarely integrate structured guidelines with primary trial literature in a unified interface.
 
-This project presents an agentic RAG system designed specifically for radiation oncology clinical decision support. It retrieves from two complementary sources: curated treatment guidelines from [RadOncReview](https://www.radoncreview.org/) and 700+ clinical trial papers from Northwestern Medicine, delivering answers grounded in authoritative evidence with full source citations. The system adapts its retrieval strategy to query complexity, applies cross-encoder reranking, and evaluates every response with a multi-agent LLM judge calibrated against human labels. Key capabilities include evidence-grounded answers with clickable source links, live quality scoring via a calibrated composite score, and abstention when evidence is insufficient.
+This project presents an agentic RAG system designed specifically for radiation oncology clinical decision support. It retrieves from two complementary sources: curated treatment guidelines from [RadOncReview](https://www.radoncreview.org/) and 700+ clinical trial papers from Northwestern Medicine, delivering answers grounded in authoritative evidence with full source citations. The system adapts its retrieval strategy to query complexity, applies cross-encoder reranking, and checks the sufficiency of the retrieved evidence. The browser shows evidence warnings, opens supporting passages from inline citations, and offers a full calibrated quality review on demand.
 
 ---
 
@@ -144,6 +144,34 @@ python api.py
 
 Then open `http://localhost:8000` in your browser.
 
+The composer includes editable **Case context** for follow-up questions. The browser
+saves it with the chat and sends up to 4,000 characters. Later corrections take
+precedence. **All sources** is the default search scope. A disease-site selection
+restricts the search, and an evidence warning on a scoped answer lets you repeat the
+question across all sources. Inline citations open the full passage supplied to
+the answer writer.
+
+The browser reports progress through retrieval, writing, and checks. Its timer
+runs until the checked answer arrives. API metadata includes separate queue,
+initialization, and engine timings. `POST /query` returns JSON, while
+`POST /query/stream` sends progress and a final answer as newline-delimited JSON.
+`GET /options` lists the supported disease sites.
+
+Normal requests run the evidence sufficiency assessment. Select **Extra quality
+review**, send `run_evaluation: true`, or run `python chat.py --quality-review` for
+the full six-assessment review. Review scores are available in the expanded
+details. Offline batch evaluation uses its full rubric.
+
+The runtime IAM role needs `dynamodb:BatchGetItem` on the passage table. Retrieval
+runs independent searches with up to four workers and processes results in plan
+order. Local regression checks use synthetic inputs.
+
+```bash
+AWS_REGION=us-west-2 S3_BUCKET_NAME=synthetic DYNAMODB_TABLE_NAME=synthetic \
+KB_ID=synthetic KB_DATASOURCE_ID=synthetic python -m unittest discover -s tests -q
+node tests/frontend_interactions.mjs
+```
+
 ### (Optional) Deploy to AWS App Runner
 
 App Runner runs `api.py` as a containerized web service with a public URL.
@@ -199,12 +227,13 @@ Clinical trial papers (700+, including DOCX and scanned PDF) are separately uplo
 | 5 | Reranker | `BAAI/bge-reranker-base` (cross-encoder) | Rerank to top-5 (simple) or top-3 per topic (complex/comparison) |
 | 6 | Synthesizer | `meta.llama3-70b-instruct-v1:0` | Response generation with inline citations |
 | 7 | Self-Critique | `meta.llama3-70b-instruct-v1:0` | Evaluates completeness, accuracy, safety — retries if needed |
-| 8 | Output Guardrails | — | Safety verification, disclaimer injection |
-| 9 | LLM Judge v3 (`evaluation/llm_judge_v3.py`) | `us.amazon.nova-pro-v1:0` | **Online** evaluation after each response: retrieval adequacy, abstention, faithfulness, correctness, answer quality — composite score shown in chat |
+| 8 | Citation Check | `meta.llama3-70b-instruct-v1:0` | Verifies claims against their cited passages |
+| 9 | Output Guardrails | — | Safety verification, disclaimer injection |
+| 10 | LLM Judge v3 (`evaluation/llm_judge_v3.py`) | `us.amazon.nova-pro-v1:0` | Evidence sufficiency for normal requests, with five additional assessments in a full review |
 
 ### 3. Evaluation Pipeline (`evaluation/`, `calibration/`, `scripts/`)
 
-The LLM judge operates in two modes: **offline** (batch evaluation on a labeled test set, used to calibrate the score and compute composite) and **online** (called automatically by the RAG engine after each response, as shown in Step 9 above). **The offline pipeline must be run first**: the online composite score depends on `calibration/weights.json` and `calibration/calibration_map.json` generated by the offline pipeline.
+The LLM judge supports offline batch evaluation and online assessment. A full online review uses the calibration maps and weights produced by the offline pipeline. The evidence sufficiency check runs independently of those files.
 
 ```
 Generate questions → LLM judge (batch) → Human labels → Calibration → Weights
@@ -257,7 +286,7 @@ python calibration/calibration.py --excel <your-excel>.xlsx
 ```
 Averages the two physician scores (`(H1 + H2) / 2`) as the ground truth, skipping any row where either score is missing. Fits **Isotonic Regression** (scikit-learn) on Correctness B and Answer Quality to align LLM scores with averaged human labels. Then computes **Spearman correlation** between each criterion and the averaged human correctness scores to derive normalized weights.
 
-**Composite score (live, shown in chat):**
+**Composite score in the expanded quality review:**
 
 ```
 composite = Σ weight[k] × calibrated_score[k]
@@ -275,7 +304,8 @@ composite = Σ weight[k] × calibrated_score[k]
 | Latency | End-to-end response time |
 | Sources | Citations with clickable document links |
 | Reasoning trace | Step-by-step agent log |
-| Composite score | Weighted calibrated score (0–5); 0 if abstention triggered |
+| Evidence warning | Flags insufficient support, partial support, or an unavailable check |
+| Quality review details | Optional calibrated composite and individual assessment scores |
 
 ---
 
@@ -354,7 +384,7 @@ Then edit `LLMConfig.model_id` in `config.py` to a model available in your accou
 - Confirm `python data_prep/main.py` has been run
 - Verify the DynamoDB table has data and the FAISS index exists in S3
 
-**Composite score missing in chat (FileNotFoundError)**
+**Calibration files missing for a full quality review (FileNotFoundError)**
 ```bash
 python calibration/calibration.py --excel <your-excel>.xlsx
 ```

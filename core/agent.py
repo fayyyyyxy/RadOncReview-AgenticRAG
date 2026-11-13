@@ -3,7 +3,8 @@ Agentic RAG Engine: Main agent that orchestrates all components.
 """
 import time
 import uuid
-from typing import List, Dict, Optional, Any
+from dataclasses import replace
+from typing import List, Dict, Optional, Any, Callable
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,7 +19,7 @@ from .task_planner import TaskPlanner
 from .retriever import RetrieverManager, MockRetrieverManager
 from .synthesizer import ResponseSynthesizer, SelfCritic
 from .citation_check import CitationChecker, cited
-from .guardrails import GuardrailManager
+from .guardrails import GuardrailManager, InputGuardrail
 from .case_labels import CaseLabels
 from .site_routing import EvidenceScope, scope_for, table_fingerprint
 
@@ -286,15 +287,24 @@ class AgenticRAGEngine:
         return citations
 
 
-    def query(self, user_query: str, labels: Optional[CaseLabels] = None, *,
-              run_evaluation: Optional[bool] = None) -> AgentResponse:
+    def query(self, user_query: str, labels: Optional[CaseLabels] = None,
+              *, prior_questions: Optional[List[str]] = None,
+              conversation_context: str = "",
+              evidence_scope: Optional[EvidenceScope] = None,
+              progress_callback: Optional[Callable[[str], None]] = None,
+              retain_history: bool = True, run_evaluation: Optional[bool] = None) -> AgentResponse:
         """
         Process a user query through the agentic RAG pipeline.
 
         Args:
             user_query: The user's clinical question.
             labels: Case labels selected by the user; used only when a feature switch asks for them.
-            run_evaluation: Override the default for the five extra quality assessments.
+            prior_questions: At most two earlier user questions, checked separately for input safety.
+            conversation_context: Editable user context, capped at 4,000 characters and checked for safety.
+            evidence_scope: Explicit per-request source filter; otherwise use the configured switch.
+            progress_callback: Receives stage names without clinical text.
+            retain_history: False for stateless web requests; browser supplies bounded context.
+            run_evaluation: Request the full quality review. Evidence sufficiency remains on either way.
 
         Returns:
             AgentResponse with answer, citations, confidence, and reasoning trace.
@@ -302,9 +312,31 @@ class AgenticRAGEngine:
         start_time = time.time()
         self.reasoning_trace = []
 
+        def progress(stage):
+            if progress_callback is not None:
+                progress_callback(stage)
+
         # ========== Step 1: Input Guardrails ==========
         self._log_reasoning("GUARDRAIL", "Checking input safety")
+        progress("input")
         input_check = self.guardrails.check_input(user_query)
+        if len(conversation_context) > 4000:
+            raise ValueError("Case context must be at most 4,000 characters.")
+        if conversation_context:
+            context_check = InputGuardrail(replace(self.config.guardrail, max_input_length=4000)).check(conversation_context)
+            if not context_check.passed:
+                input_check = context_check
+
+        # Only user-authored context is carried forward; generated answers never become evidence.
+        # Bound both turns and length without silently truncating clinical qualifiers.
+        prior_questions = list(prior_questions or [])
+        if len(prior_questions) > 2:
+            raise ValueError("At most two earlier questions may be used as context.")
+        for previous in prior_questions:
+            previous_check = self.guardrails.check_input(previous)
+            if not previous_check.passed:
+                input_check = previous_check
+                break
 
         if not input_check.passed:
             self._log_reasoning("GUARDRAIL", f"Input blocked: {input_check.warnings}")
@@ -313,15 +345,28 @@ class AgenticRAGEngine:
                 answer="I cannot process this query due to safety concerns. " +
                        "; ".join(input_check.warnings),
                 confidence_score=0.0,
+                metadata={"input_blocked": True},
                 reasoning_trace=self.reasoning_trace,
                 latency_ms=(time.time() - start_time) * 1000
             )
 
         # Use filtered text if PHI was removed
         processed_query = input_check.filtered_text or user_query
+        if prior_questions or conversation_context:
+            previous = "\n\n".join(f"Earlier question {i}: {q}" for i, q in enumerate(prior_questions, 1))
+            processed_query = (
+                "Use the earlier user questions only to resolve references and case context. "
+                "They are not clinical evidence. Answer only the current question; "
+                "its corrections take precedence over earlier context.\n\n"
+                "The edited case context supersedes conflicting earlier questions.\n\n"
+                "Within case context, later corrections supersede earlier entries.\n\n"
+                f"{previous}\n\nEdited case context:\n{conversation_context}\n\n"
+                f"Current clinical question:\n{processed_query}"
+            )
 
         # ========== Step 2: Query Analysis ==========
         self._log_reasoning("ANALYZE", "Analyzing query intent and entities")
+        progress("analyze")
 
         # Use LLM-enhanced analysis for complex queries, rule-based for simple one
         analysis = self.query_analyzer.analyze(processed_query)
@@ -339,6 +384,7 @@ class AgenticRAGEngine:
 
         # ========== Step 3: Task Planning ==========
         self._log_reasoning("PLAN", "Creating execution plan")
+        progress("plan")
         plan = self.task_planner.plan(analysis)
 
         self._log_reasoning("PLAN",
@@ -347,10 +393,12 @@ class AgenticRAGEngine:
 
         # ========== Step 4: Execute Retrieval Tasks ==========
         labels = labels or CaseLabels()
-        scope = scope_for(labels.disease_site) if self.config.features.site_filter else EvidenceScope()
+        scope = evidence_scope if evidence_scope is not None else (
+            scope_for(labels.disease_site) if self.config.features.site_filter else EvidenceScope())
         if scope != EvidenceScope():
             self._log_reasoning("ROUTE", f"Evidence limited to {labels.disease_site}")
         self._log_reasoning("RETRIEVE", "Executing retrieval tasks")
+        progress("retrieve")
 
         self._execute_retrieval_tasks(plan.sub_tasks, scope)
 
@@ -371,6 +419,7 @@ class AgenticRAGEngine:
 
         # ========== Step 5: Response Synthesis ==========
         self._log_reasoning("SYNTHESIZE", "Generating response from retrieved information")
+        progress("synthesize")
 
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
             answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
@@ -388,6 +437,7 @@ class AgenticRAGEngine:
         critique = None
         if self.config.agent.enable_self_critique:
             self._log_reasoning("CRITIQUE", "Performing self-evaluation")
+            progress("critique")
             critique = self.self_critic.critique(
                 processed_query, answer, citations, analysis
             )
@@ -402,6 +452,7 @@ class AgenticRAGEngine:
             # Retry if critique suggests improvement needed
             if self.self_critic.should_retry(critique):
                 self._log_reasoning("CRITIQUE", "Answer needs improvement, retrying...")
+                progress("refine")
 
                 # Get improvement guidance
                 guidance = self.self_critic.get_improvement_guidance(critique)
@@ -434,6 +485,7 @@ class AgenticRAGEngine:
         citation_check = None
         if self.config.features.citation_check:
             self._log_reasoning("CHECK", "Checking each citation against its passage")
+            progress("citations")
             answer_before = answer
             answer, citation_check = self.citation_checker.check(answer, context_passages)
             # 💡 Kept so that a change to the check can be replayed on the same answer instead of a new run
@@ -449,6 +501,7 @@ class AgenticRAGEngine:
 
         # ========== Step 7: Output Guardrails ==========
         self._log_reasoning("GUARDRAIL", "Checking output safety")
+        progress("safety")
         final_answer, output_check = self.guardrails.process_output(answer)
 
         if not output_check.passed:
@@ -478,7 +531,7 @@ class AgenticRAGEngine:
             context_passages=context_passages,
             routing={
                 "labels": vars(labels),
-                "site_filter": self.config.features.site_filter,
+                "site_filter": scope != EvidenceScope(),
                 "review_note_categories": sorted(scope.review_note_categories)
                 if scope.review_note_categories is not None else None,
                 "trial_paper_folders": sorted(scope.trial_paper_folders)
@@ -486,6 +539,10 @@ class AgenticRAGEngine:
                 "site_table": table_fingerprint(),
             },
             metadata={
+                "context": {
+                    "earlier_questions": len(prior_questions),
+                    "case_context_chars": len(conversation_context),
+                },
                 "analysis": {
                     "intent": analysis.intent.value,
                     "disease_category": analysis.disease_category,
@@ -508,6 +565,7 @@ class AgenticRAGEngine:
 
         # Evidence sufficiency stays on, even when the five additional assessments are off.
         retrieved_texts = [p.get("text", "") for p in context_passages]
+        progress("evidence")
         evidence_check = {"status": "unavailable", "flagged": None, "judgment": None,
                           "reason": "The evidence sufficiency check could not finish."}
         try:
@@ -524,6 +582,7 @@ class AgenticRAGEngine:
         full_evaluation = self.enable_judge if run_evaluation is None else run_evaluation
         response.metadata["quality_evaluation"] = {"requested": full_evaluation, "status": "skipped"}
         if full_evaluation:
+            progress("evaluate")
 
             try:
                 self._log_reasoning("JUDGE", "Evaluating with multi-agent judge")
@@ -565,12 +624,11 @@ class AgenticRAGEngine:
         response.latency_ms = (time.time() - start_time) * 1000
         self._log_reasoning("COMPLETE", f"Total latency: {response.latency_ms:.0f}ms")
 
-        # Store in conversation history
-        self.conversation_history.append({
-            "query": user_query,
-            "response": response,
-            "timestamp": datetime.now()
-        })
+        if retain_history:
+            self.conversation_history.append({
+                "query": user_query, "response": response, "timestamp": datetime.now()
+            })
+        progress("complete")
 
         return response
 
