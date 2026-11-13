@@ -17,6 +17,7 @@ from .query_analyzer import QueryAnalyzer
 from .task_planner import TaskPlanner
 from .retriever import RetrieverManager, MockRetrieverManager
 from .synthesizer import ResponseSynthesizer, SelfCritic
+from .citation_check import CitationChecker, cited
 from .guardrails import GuardrailManager
 from .case_labels import CaseLabels
 from .site_routing import EvidenceScope, scope_for, table_fingerprint
@@ -41,7 +42,7 @@ class AgenticRAGEngine:
 
         Args:
             config: Configuration object. Uses default if not provided.
-            enable_judge: If False, skip LLM judge evaluation (for batch eval).
+            enable_judge: Whether to run all quality assessments by default.
             use_mock: If True, use mock LLM and retriever for testing.
         """
         self.config = config or default_config
@@ -70,6 +71,7 @@ class AgenticRAGEngine:
 
         self.synthesizer = ResponseSynthesizer(self.llm, self.config)
         self.self_critic = SelfCritic(self.llm, self.config.agent)
+        self.citation_checker = CitationChecker(self.llm)
         self.guardrails = GuardrailManager(self.config.guardrail)
 
         # State
@@ -284,13 +286,15 @@ class AgenticRAGEngine:
         return citations
 
 
-    def query(self, user_query: str, labels: Optional[CaseLabels] = None) -> AgentResponse:
+    def query(self, user_query: str, labels: Optional[CaseLabels] = None, *,
+              run_evaluation: Optional[bool] = None) -> AgentResponse:
         """
         Process a user query through the agentic RAG pipeline.
 
         Args:
             user_query: The user's clinical question.
             labels: Case labels selected by the user; used only when a feature switch asks for them.
+            run_evaluation: Override the default for the five extra quality assessments.
 
         Returns:
             AgentResponse with answer, citations, confidence, and reasoning trace.
@@ -425,6 +429,24 @@ class AgenticRAGEngine:
                 confidence = (confidence + critique.confidence_score) / 2
                 plan = improved_plan
 
+        # ========== Step 6b: Citation Check ==========
+        # After any retry, so the final answer is the one checked
+        citation_check = None
+        if self.config.features.citation_check:
+            self._log_reasoning("CHECK", "Checking each citation against its passage")
+            answer_before = answer
+            answer, citation_check = self.citation_checker.check(answer, context_passages)
+            # 💡 Kept so that a change to the check can be replayed on the same answer instead of a new run
+            citation_check["answer_before"] = answer_before
+            # Only citations still in the answer stay in the source list
+            remaining = cited(answer)
+            citations = [c for c in citations if c.citation_id in remaining]
+            self._log_reasoning("CHECK",
+                f"Removed {citation_check['removed']} of {citation_check['citations']} citations, "
+                f"{citation_check['unchecked']} unchecked"
+                + (f", check failed: {citation_check['error']}" if citation_check["error"] else "")
+            )
+
         # ========== Step 7: Output Guardrails ==========
         self._log_reasoning("GUARDRAIL", "Checking output safety")
         final_answer, output_check = self.guardrails.process_output(answer)
@@ -438,7 +460,7 @@ class AgenticRAGEngine:
 
         # ========== Build Final Response ==========
         latency_ms = (time.time() - start_time) * 1000
-        self._log_reasoning("COMPLETE", f"Total latency: {latency_ms:.0f}ms")
+        self._log_reasoning("ANSWER_READY", f"Answer checks completed: {latency_ms:.0f}ms; evaluation follows")
 
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
             total_chunks = sum(len(v) for v in chunks_by_topic.values())
@@ -481,26 +503,47 @@ class AgenticRAGEngine:
             latency_ms=latency_ms
         )
 
-        # ========== Step 8: LLM Judge Evaluation ==========
-        if self.enable_judge:
-            if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
-                retrieved_texts = [
-                    chunk.get("text", "")
-                    for topic_chunks in chunks_by_topic.values()
-                    for chunk in topic_chunks
-                ]
+        if citation_check is not None:
+            response.metadata["citation_check"] = citation_check
+
+        # Evidence sufficiency stays on, even when the five additional assessments are off.
+        retrieved_texts = [p.get("text", "") for p in context_passages]
+        evidence_check = {"status": "unavailable", "flagged": None, "judgment": None,
+                          "reason": "The evidence sufficiency check could not finish."}
+        try:
+            if self.use_mock:
+                evidence_check["reason"] = "Evidence sufficiency is not assessed in mock mode."
             else:
-                retrieved_texts = [chunk.get("text", "") for chunk in all_chunks]
+                from evaluation.llm_judge_v3 import evaluate_abstention
+                evidence_check = evaluate_abstention(processed_query, final_answer, retrieved_texts)
+        except Exception as exc:
+            self._log_reasoning("EVIDENCE", f"Evidence sufficiency check unavailable: {type(exc).__name__}")
+        response.metadata["evidence_check"] = evidence_check
+
+        # ========== Step 8: Optional Full Quality Evaluation ==========
+        full_evaluation = self.enable_judge if run_evaluation is None else run_evaluation
+        response.metadata["quality_evaluation"] = {"requested": full_evaluation, "status": "skipped"}
+        if full_evaluation:
 
             try:
                 self._log_reasoning("JUDGE", "Evaluating with multi-agent judge")
                 from evaluation.llm_judge_v3 import evaluate_single_query
                 eval_result = evaluate_single_query(
-                    question=user_query,
+                    question=processed_query,
                     answer=final_answer,
                     contexts=retrieved_texts,
+                    abstention_check=evidence_check,
                 )
                 response.metadata["judge_evaluations"] = [eval_result]
+                response.metadata["quality_evaluation"]["status"] = "completed"
+                # A full review may recover a failed initial evidence check.
+                judgment = eval_result.get("abstention_judgment")
+                if judgment in {"Appropriately Answered", "Should Have Abstained", "Partial Abstention Preferred"}:
+                    response.metadata["evidence_check"] = {
+                        "status": "completed", "judgment": judgment,
+                        "reason": eval_result.get("abstention_justification", ""),
+                        "flagged": judgment != "Appropriately Answered",
+                    }
                 self._log_reasoning("JUDGE",
                     f"Retrieval Adequacy: {eval_result['retrieval_adequacy']}/5, "
                     f"Faithfulness: {eval_result['faithfulness']}/5, "
@@ -515,6 +558,12 @@ class AgenticRAGEngine:
                     raise
                 self._log_reasoning("JUDGE", f"Evaluation failed: {str(e)}")
                 response.metadata["judge_evaluations"] = []
+                response.metadata["quality_evaluation"]["status"] = "failed"
+
+        # Include online evaluation when enabled; it finishes after answer generation.
+        response.metadata["answer_ready_ms"] = latency_ms
+        response.latency_ms = (time.time() - start_time) * 1000
+        self._log_reasoning("COMPLETE", f"Total latency: {response.latency_ms:.0f}ms")
 
         # Store in conversation history
         self.conversation_history.append({
@@ -535,7 +584,7 @@ class AgenticRAGEngine:
         self.guardrails.reset()
 
 
-def create_agent(use_mock: bool = False, config: Config = None) -> AgenticRAGEngine:
+def create_agent(use_mock: bool = False, config: Config = None, enable_judge: bool = False) -> AgenticRAGEngine:
     """
     Factory function to create an Agentic RAG Engine.
 
@@ -546,4 +595,4 @@ def create_agent(use_mock: bool = False, config: Config = None) -> AgenticRAGEng
     Returns:
         Configured AgenticRAGEngine instance.
     """
-    return AgenticRAGEngine(config=config, use_mock=use_mock)
+    return AgenticRAGEngine(config=config, use_mock=use_mock, enable_judge=enable_judge)

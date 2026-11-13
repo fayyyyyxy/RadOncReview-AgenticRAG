@@ -8,6 +8,7 @@ Usage:
 """
 import sys
 import os
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -15,7 +16,10 @@ from core.agent import create_agent
 from config import default_config
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--quality-review', action='store_true', help='Run all six assessments. Evidence sufficiency always runs.')
+    args = parser.parse_args(argv)
     print("=" * 60)
     print("  RadOnc Agentic RAG - Interactive Chat")
     print("=" * 60)
@@ -25,7 +29,7 @@ def main():
     
     try:
         # Create agent with real AWS connection
-        agent = create_agent(use_mock=False)
+        agent = create_agent(use_mock=False, enable_judge=args.quality_review)
         print("\n System ready!")
         print("  - AWS connected")
         print("  - Cross-encoder model loaded")

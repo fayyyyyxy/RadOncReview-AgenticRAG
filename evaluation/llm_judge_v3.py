@@ -512,11 +512,12 @@ Return ONLY valid JSON:
         answer: str,
         contexts: List[str],
         expected_answer: str,
+        abstention_result: Optional[AbstentionResult] = None,
     ) -> BatchJudgeV3Result:
         result = BatchJudgeV3Result()
 
         result.retrieval_adequacy = self.judge_retrieval_adequacy(question, contexts)
-        result.abstention         = self.judge_abstention(question, contexts, answer)
+        result.abstention = abstention_result or self.judge_abstention(question, contexts, answer)
         result.should_abstain     = (
             "Yes" if result.abstention.judgment == "Should Have Abstained" else "No"
         )
@@ -542,11 +543,12 @@ Return ONLY valid JSON:
         question: str,
         answer: str,
         contexts: List[str],
+        abstention_result: Optional[AbstentionResult] = None,
     ) -> JudgeV3Result:
         result = JudgeV3Result()
 
         result.retrieval_adequacy = self.judge_retrieval_adequacy(question, contexts)
-        result.abstention         = self.judge_abstention(question, contexts, answer)
+        result.abstention = abstention_result if abstention_result is not None else self.judge_abstention(question, contexts, answer)
         result.should_abstain     = (
             "Yes" if result.abstention.judgment == "Should Have Abstained" else "No"
         )
@@ -591,6 +593,8 @@ def load_completed_questions(csv_path: str) -> set:
 
 
 def extract_contexts(response) -> List[str]:
+    if response.context_passages:
+        return [passage["text"] for passage in response.context_passages]
     contexts = []
     if response.task_plan:
         for task in response.task_plan.sub_tasks:
@@ -678,6 +682,7 @@ def run_evaluation(
                     response = agent.query(question)
                     answer   = response.answer
                     contexts = extract_contexts(response)
+                    abstention = _completed_abstention(response.metadata.get("evidence_check"))
                 except Exception as e:
                     print(f"  [{i:2d}/{len(questions)}] RAG FAILED: {e}")
                     total_error += 1
@@ -689,6 +694,7 @@ def run_evaluation(
                         answer          = answer,
                         contexts        = contexts,
                         expected_answer = q["expected_answer"],
+                        abstention_result = abstention,
                     )
                 except Exception as e:
                     print(f"  [{i:2d}/{len(questions)}] JUDGE FAILED: {e}")
@@ -725,10 +731,30 @@ def run_evaluation(
 
 
 # evaluate_single_query: called from core/agent.py
+ABSTENTION_JUDGMENTS = {"Appropriately Answered", "Should Have Abstained", "Partial Abstention Preferred"}
+
+
+def evaluate_abstention(question: str, answer: str, contexts: List[str]) -> Dict[str, Any]:
+    """One evidence-sufficiency call, independent of optional scores and calibration files."""
+    result = _get_judge().judge_abstention(question, contexts, answer)
+    if result.judgment not in ABSTENTION_JUDGMENTS:
+        raise ValueError("Evidence sufficiency assessment returned no valid judgment")
+    return {"status": "completed", "judgment": result.judgment,
+            "reason": result.justification,
+            "flagged": result.judgment != "Appropriately Answered"}
+
+
+def _completed_abstention(check: Optional[Dict[str, Any]]) -> Optional[AbstentionResult]:
+    if check and check.get("status") == "completed":
+        return AbstentionResult(judgment=check["judgment"], justification=check.get("reason", ""))
+    return None
+
+
 def evaluate_single_query(
     question: str,
     answer: str,
     contexts: List[str],
+    abstention_check: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Chatbot evaluation — Mode B only, with Isotonic calibration.
@@ -736,14 +762,17 @@ def evaluate_single_query(
     Requires calibration/calibration_map.json and calibration/weights.json to exist.
     """
     judge  = _get_judge()
+    prior = _completed_abstention(abstention_check)
     result = judge.evaluate_chatbot(
-        question=question, answer=answer, contexts=contexts
+        question=question, answer=answer, contexts=contexts, abstention_result=prior,
     )
 
     return {
         "retrieval_adequacy":           result.retrieval_adequacy.score,
         "retrieval_adequacy_reasoning": result.retrieval_adequacy.reasoning,
         "should_abstain":               result.should_abstain,
+        "abstention_judgment":          result.abstention.judgment,
+        "abstention_justification":     result.abstention.justification,
         "did_abstain":                  result.did_abstain,
         "faithfulness":                 result.faithfulness.score,
         "faithfulness_reasoning":       result.faithfulness.reasoning,
