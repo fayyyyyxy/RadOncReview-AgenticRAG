@@ -197,7 +197,7 @@ Clinical trial papers (700+, including DOCX and scanned PDF) are separately uplo
 | 3 | Task Planner | `us.openai.gpt-5.6-terra` | Query decomposition, retrieval strategy selection |
 | 4 | Retriever | FAISS + DynamoDB + Bedrock KB |  FAISS: dense search; KB: hybrid search. top-6 FAISS & top-10 KB per topic| 
 | 5 | Reranker | `BAAI/bge-reranker-base` (cross-encoder) | Rerank to top-5 (simple) or top-3 per topic (complex/comparison), each topic against the selected disease site and its label (the vignette when no site is selected); a topic skips passages an earlier topic took and takes its next-ranked one |
-| 6 | Synthesizer | `us.openai.gpt-5.6-terra` | Response generation with inline citations, under the seven parts of a plan (indication to follow-up) |
+| 6 | Synthesizer | `us.openai.gpt-5.6-terra` | Response generation with inline citations, under the seven parts of a plan (indication to follow-up); also shown up to two similar past cases from the selected disease site, with their attending plans, as institutional examples that are never cited (`core/institutional_examples.py`; none without a selected site or a local past-case index) |
 | 7 | Self-Critique | `us.openai.gpt-5.6-terra` | Checks what the question asks and the seven parts, and safety — re-plans and rewrites once if needed; citation support is left to step 8 |
 | 8 | Citation Check (`core/citation_check.py`) | `us.openai.gpt-5.6-terra` | Checks each citation against its passage; removes unsupported ones and lists those sentences for the page to mark |
 | 9 | Output Guardrails | — | Safety verification, disclaimer injection |
@@ -304,6 +304,7 @@ RadOncReview-AgenticRAG/
 │   ├── task_planner.py            # Query decomposition & retrieval strategy
 │   ├── retriever.py               # FAISS + DynamoDB + Bedrock KB + reranking
 │   ├── synthesizer.py             # Response generation & self-critique
+│   ├── institutional_examples.py  # Similar past cases for the writer, kept apart from evidence
 │   └── guardrails.py              # Input/output safety checks
 │
 ├── evaluation/                    

@@ -99,7 +99,10 @@ python patient_cases/run_baseline.py --execute --limit 1
 
 This downloads the reranker model if needed, reads existing AWS evidence,
 creates query embeddings, and makes paid LLM calls in the configured account.
-It uses evidence only. The separate LLM judge is off by default; self-critique remains enabled as
+The writer also gets up to two similar past cases from the local past-case
+index as institutional examples, never cited; the case itself and its
+patient's other encounters are excluded, and a missing index stops the run.
+Pass --no-institutional-examples to write from evidence alone. The separate LLM judge is off by default; self-critique remains enabled as
 configured by the existing engine. Add --judge only if its extra model calls
 and calibration requirements are intended. Temperature is set to zero; this
 does not guarantee identical model responses on repeated runs. Every engine LLM
@@ -223,21 +226,22 @@ result.
 The switches for experiments that were not kept were removed after the final
 comparison. The tag pre-cleanup-2026-11-08 still has every one of them, and
 docs/rag_improvement_plan_v2.md has their results: --site-filter (evidence
-limited to the selected site), --institutional-examples (up to two past cases
-given to the writer), --repair-batch, --no-replan, --citation-flag-only and the
+limited to the selected site), --repair-batch, --no-replan, --citation-flag-only and the
 critique's named gap (Part 1), --critic-edits and --critic-model (E4), and
 --no-citation-check, --no-trial-papers, --no-completeness-template and the
 vignette as the rerank query. To rerun one of them, or the final, E4 and E1
 arms, check out that tag in a worktree; the base arm ran at f315841.
+Institutional examples were removed with them and later brought back, on by
+default; the final, E4 and E1 arms ran without them.
 
 Keep locked-test cases out of development retrieval indexes and prompt tuning.
 For baseline queries, pass only the vignette and clinical question; keep the
-attending plan separate for review. Later, development attending plans may be
-used as worked-example payloads in a separate index, following the workbook's
-integration instructions. Institutional examples are not citable evidence.
+case's own attending plan separate for review. Other development cases'
+attending plans are worked-example payloads in a separate index, following the
+workbook's integration instructions. Institutional examples are not citable evidence.
 
-When running a development query against an example index later, exclude that
-case and other encounters belonging to the same patient. Patient ID is for
+A development query run against the example index excludes that case and
+other encounters belonging to the same patient. Patient ID is for
 this grouping check, not a clinical similarity feature or model input. Other
 metadata also needs review before model use: for example, Technique may
 describe the delivered treatment rather than information known at decision time.

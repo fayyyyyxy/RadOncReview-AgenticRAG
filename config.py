@@ -110,6 +110,19 @@ class GuardrailConfig:
 
 
 @dataclass
+class InstitutionalExamplesConfig:
+    """Up to two similar past cases, with their attending plans, shown to the writer as practice, never as evidence."""
+    enabled: bool = True
+    # Local only: the index holds clinical text, so it is built from the workbook (patient_cases/build_past_case_index.py)
+    # and never copied into the Docker image
+    index_path: str = str(PROJECT_ROOT / "patient_cases/data/processed/past_case_index")
+    # The development export the index must have been built from; None accepts the export beside the index
+    source_sha256: Optional[str] = None
+    # False lets the web app run without examples when the index is missing; the runner sets True
+    require_index: bool = False
+
+
+@dataclass
 class Config:
     """Main configuration container."""
     aws: AWSConfig = field(default_factory=AWSConfig)
@@ -118,6 +131,7 @@ class Config:
     retriever: RetrieverConfig = field(default_factory=RetrieverConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     guardrail: GuardrailConfig = field(default_factory=GuardrailConfig)
+    institutional_examples: InstitutionalExamplesConfig = field(default_factory=InstitutionalExamplesConfig)
 
 
 # Default configuration instance

@@ -20,6 +20,7 @@ from .synthesizer import ResponseSynthesizer, SelfCritic
 from .citation_check import CitationChecker, cited
 from .guardrails import GuardrailManager
 from .case_labels import NOT_SPECIFIED, CaseLabels
+from .institutional_examples import CaseContext, LocalInstitutionalExamples
 
 
 class AgenticRAGEngine:
@@ -35,7 +36,8 @@ class AgenticRAGEngine:
     6. Safety guardrails
     """
 
-    def __init__(self, config: Config = None, use_mock: bool = False, enable_judge: bool = True):
+    def __init__(self, config: Config = None, use_mock: bool = False, enable_judge: bool = True,
+                 example_provider=None):
         """
         Initialize the Agentic RAG Engine.
 
@@ -43,10 +45,31 @@ class AgenticRAGEngine:
             config: Configuration object. Uses default if not provided.
             enable_judge: If False, skip LLM judge evaluation (for batch eval).
             use_mock: If True, use mock LLM and retriever for testing.
+            example_provider: Institutional examples to use instead of the local past-case index.
         """
         self.config = config or default_config
         self.use_mock = use_mock
         self.enable_judge = enable_judge
+
+        # ========== Institutional examples ==========
+        self.example_provider = example_provider
+        # Why examples are missing although switched on; reported with every answer
+        self.examples_unavailable: Optional[str] = None
+        examples_config = self.config.institutional_examples
+        if examples_config.enabled and self.example_provider is None:
+            if use_mock:
+                self.examples_unavailable = "The mock engine reads no past-case index."
+            else:
+                try:
+                    self.example_provider = LocalInstitutionalExamples(
+                        examples_config.index_path, self.config.embedding.model_id,
+                        self.config.embedding.dimension, expected_source_sha256=examples_config.source_sha256,
+                    )
+                except (ValueError, OSError) as e:
+                    if examples_config.require_index:
+                        raise
+                    self.examples_unavailable = str(e)
+                    print(f"Warning: answers will be written without institutional examples. {e}")
 
         # Initialize LLM client
         self.llm = create_llm_client(
@@ -274,6 +297,25 @@ class AgenticRAGEngine:
                 merged.setdefault(topic, []).extend(new)
         return merged
 
+    def _select_examples(self, query: str, labels: CaseLabels, case_context: Optional[CaseContext],
+                         evidence_count: int) -> tuple[List[Dict], Dict[str, Any]]:
+        """The past cases shown to the writer, and a report of why there are as many as there are."""
+        if not self.config.institutional_examples.enabled:
+            return [], {"status": "off"}
+        if self.example_provider is None:
+            return [], {"status": "index_unavailable", "reason": self.examples_unavailable}
+        if not evidence_count:
+            # Examples alone never produce an answer
+            examples, status = [], "no_evidence"
+        elif labels.disease_site == NOT_SPECIFIED:
+            # Past cases come from the selected disease site only, so none are searched without one
+            examples, status = [], "no_disease_site"
+        else:
+            examples = self.example_provider.select(query, labels, self.retriever._get_embedding, case_context)
+            status = "selected" if examples else "no_matching_examples"
+        self._log_reasoning("EXAMPLES", f"{len(examples)} institutional examples ({status})")
+        return examples, {"status": status, **self.example_provider.provenance(), "examples": examples}
+
     def _enrich_citations_with_urls(self, citations: List[Citation]) -> List[Citation]:
         for citation in citations:
             if not citation.source_url:
@@ -294,13 +336,16 @@ class AgenticRAGEngine:
 
 
     def query(self, user_query: str, labels: Optional[CaseLabels] = None,
-              plan: Optional[TaskPlan] = None) -> AgentResponse:
+              case_context: Optional[CaseContext] = None, plan: Optional[TaskPlan] = None) -> AgentResponse:
         """
         Process a user query through the agentic RAG pipeline.
 
         Args:
             user_query: The user's clinical question.
-            labels: Case labels selected by the user; the disease site is what passages are reranked against.
+            labels: Case labels selected by the user; the disease site is what passages are reranked against and
+                which past cases are searched.
+            case_context: The workbook case this query was made from (evaluation runs only), so the case itself and
+                its patient's other encounters are never shown as examples.
             plan: A saved plan to search with instead of analyzing and planning again (evaluation runs only).
 
         Returns:
@@ -327,6 +372,13 @@ class AgenticRAGEngine:
 
         # Use filtered text if PHI was removed
         processed_query = input_check.filtered_text or user_query
+
+        # Linkage is checked before any paid call and is never included in the clinical query
+        if case_context is not None:
+            if case_context.query() != processed_query:
+                raise ValueError("A case context must match the query it was made from.")
+            if self.example_provider is not None:
+                self.example_provider.validate_context(case_context)
 
         # A plan made for another query would search for the wrong patient; checked before any paid call
         if plan is not None and plan.original_query != processed_query:
@@ -398,16 +450,19 @@ class AgenticRAGEngine:
                 f"Collected {len(all_chunks)} chunks (cross-encoder reranked)"
             )
 
+        # Chosen once and shown to the first draft and any rewrite; never to the critique, citation check or judge
+        examples, example_report = self._select_examples(processed_query, labels, case_context, total_chunks)
+
         # ========== Step 5: Response Synthesis ==========
         self._log_reasoning("SYNTHESIZE", "Generating response from retrieved information")
 
         if analysis.intent == QueryIntent.COMPARISON or analysis.is_complex:
             answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
-                processed_query, analysis, chunks_by_topic
+                processed_query, analysis, chunks_by_topic, institutional_examples=examples
             )
         else:
             answer, citations, confidence, context_passages = self.synthesizer.synthesize(
-                processed_query, analysis, plan, all_chunks
+                processed_query, analysis, plan, all_chunks, institutional_examples=examples
             )
         self._log_reasoning("SYNTHESIZE",
             f"Generated answer with {len(citations)} citations, confidence: {confidence:.2f}"
@@ -454,12 +509,14 @@ class AgenticRAGEngine:
                         chunks_by_topic, self._collect_multi_topic_chunks(improved_plan, site=rerank_site)
                     )
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize_multi_topic(
-                        processed_query, analysis, chunks_by_topic, feedback=guidance, draft=answer
+                        processed_query, analysis, chunks_by_topic, feedback=guidance, draft=answer,
+                        institutional_examples=examples
                     )
                 else:
                     all_chunks = self._merge_chunks(all_chunks, self._collect_all_chunks(improved_plan))
                     answer, citations, confidence, context_passages = self.synthesizer.synthesize(
-                        processed_query, analysis, improved_plan, all_chunks, feedback=guidance, draft=answer
+                        processed_query, analysis, improved_plan, all_chunks, feedback=guidance, draft=answer,
+                        institutional_examples=examples
                     )
 
                 # Update confidence with critique score
@@ -517,6 +574,7 @@ class AgenticRAGEngine:
             context_passages=context_passages,
             synthesis_requests=list(self.synthesizer.requests),
             routing={"labels": vars(labels)},
+            institutional_examples=example_report,
             metadata={
                 "analysis": {
                     "intent": analysis.intent.value,
@@ -535,6 +593,8 @@ class AgenticRAGEngine:
             latency_ms=latency_ms
         )
         response.metadata["citation_check"] = citation_check
+        # Status and count only: the examples' clinical text stays out of the API payload
+        response.metadata["institutional_examples"] = {"status": example_report["status"], "count": len(examples)}
         if critique is not None:
             response.metadata["first_draft"] = first_draft
 

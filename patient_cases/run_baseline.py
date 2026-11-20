@@ -71,6 +71,17 @@ def labels_for(case_ids, workbook):
     }
 
 
+def case_contexts_for(selected, workbook):
+    """Each case's study linkage, so neither the case nor its patient's other encounters become its own examples."""
+    from core.institutional_examples import CaseContext
+    records = {r["Case ID"]: r for r in read_records(workbook)}
+    return {
+        item["case_id"]: CaseContext(vignette=item["vignette"], clinical_question=item["clinical_question"],
+                                     case_id=item["case_id"], patient_id=records[item["case_id"]]["Patient ID"])
+        for item in selected
+    }
+
+
 # The engine's trace line giving the size and reasoning of the first-round plan (written in core/agent.py)
 PLAN_LINE = re.compile(r"\] PLAN: Created (\d+) sub-tasks: (.*)", re.S)
 
@@ -120,7 +131,7 @@ def json_value(value):
     raise TypeError(f"Unsupported output type: {type(value).__name__}")
 
 
-def run_case(engine, item, max_length, labels=None, plan=None):
+def run_case(engine, item, max_length, labels=None, case_context=None, plan=None):
     """Save blocked/error cases explicitly; never truncate clinical input."""
     query = make_query(item)
     labels = labels or CaseLabels()
@@ -133,7 +144,7 @@ def run_case(engine, item, max_length, labels=None, plan=None):
         engine.reset_conversation()
         with redirect_stdout(log), redirect_stderr(log):
             extra = {"plan": plan} if plan is not None else {}
-            response = engine.query(query, labels, **extra)
+            response = engine.query(query, labels, case_context=case_context, **extra)
         retrieval = response.metadata.get("retrieval", {})
         status = "response_generated"
         if not retrieval:
@@ -163,7 +174,10 @@ def main(argv=None):
     parser.add_argument("--replay-plans", metavar="NAME",
                         help="Search with the first-round plans saved in outputs/NAME_answers instead of planning anew, "
                              "so runs compared case by case retrieve the same first-round passages.")
+    parser.add_argument("--no-institutional-examples", action="store_true",
+                        help="Write from evidence alone, without similar past cases, as the evidence-only arm.")
     args = parser.parse_args(argv)
+    examples_on = not args.no_institutional_examples
     try:
         for flag, value in (("--name", args.name), ("--replay-plans", args.replay_plans)):
             if value is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", value):
@@ -183,6 +197,7 @@ def main(argv=None):
         if not args.execute:
             print(json.dumps({
                 "mode": "dry_run", "aws_calls": 0, "model": args.model, "replayed_plans": args.replay_plans,
+                "institutional_examples": examples_on,
                 "output_folder": named.name if named else "baseline_<timestamp>_<id>",
                 "validated_development_inputs": len(inputs),
                 "selected": [{"case_id": r["case_id"], "query_characters": len(make_query(r))} for r in selected],
@@ -197,6 +212,10 @@ def main(argv=None):
         config.llm.temperature = 0.0
         # ⚠️ One shared client serves the analyzer, planner, writer and self-critique, so all of them switch
         config.llm.model_id = args.model
+        config.institutional_examples.enabled = examples_on
+        # A run asked to use examples stops if the index is missing, instead of finishing as an evidence-only run
+        config.institutional_examples.require_index = True
+        case_contexts = case_contexts_for(selected, args.workbook)
         # Log all settings, including the opt-in judge difference from the web app.
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
         # ⚠️ Tracked files only: untracked notes and drawings outside the code marked every run dirty
@@ -206,7 +225,8 @@ def main(argv=None):
         output = named or ROOT / "outputs" / ("baseline_" + run_id)
         output.mkdir(parents=True, exist_ok=False)
         manifest = {
-            "run_id": run_id, "mode": "existing_evidence_only_rag",
+            "run_id": run_id,
+            "mode": "evidence_with_institutional_examples" if examples_on else "existing_evidence_only_rag",
             "git_commit": revision.stdout.strip(), "working_tree_dirty": bool(changes.stdout.strip()),
             "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "input_sha256": hashlib.sha256(args.inputs.read_bytes()).hexdigest(),
@@ -226,9 +246,12 @@ def main(argv=None):
             # Store startup warnings, including any reranker model download failure.
             with (output / "startup.log").open("w", encoding="utf-8") as log, redirect_stdout(log), redirect_stderr(log):
                 engine = AgenticRAGEngine(config=config, enable_judge=args.judge)
+            if examples_on:
+                manifest["institutional_example_index"] = engine.example_provider.provenance()
+                (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
             for item in selected:
                 result = run_case(engine, item, config.guardrail.max_input_length, labels[item["case_id"]],
-                                  plans.get(item["case_id"]))
+                                  case_contexts[item["case_id"]], plans.get(item["case_id"]))
                 with (output / "results.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(result, ensure_ascii=False, default=json_value) + "\n")
                 statuses.append(result["status"])
